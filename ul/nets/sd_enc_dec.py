@@ -489,17 +489,19 @@ def main():
     print(z.shape)
     print(x_.shape)
 
-    # summary
-    summary(
-        encoder,
-        (1, ch, D, D),
-        col_names=["output_size", "num_params", "kernel_size", "mult_adds"],
-    )
-    summary(
-        decoder,
-        z[:, :4, :, :].shape,
-        col_names=["output_size", "num_params", "kernel_size", "mult_adds"],
-    )
+    # # summary
+    # summary(
+    #     encoder,
+    #     (1, ch, D, D),
+    #     col_names=["output_size", "num_params", "kernel_size", "mult_adds"],
+    # )
+    # summary(
+    #     decoder,
+    #     z[:, :4, :, :].shape,
+    #     col_names=["output_size", "num_params", "kernel_size", "mult_adds"],
+    # )
+    print(encoder)
+    print(decoder)
 
 
 if __name__ == "__main__":

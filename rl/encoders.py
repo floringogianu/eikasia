@@ -1,9 +1,10 @@
 from gzip import GzipFile
-from turtle import forward
+
 import torch
 import torch.nn as nn
-from ul.nets import WMEncoder as _WMEncoder
 from torchvision import transforms as T
+from ul.nets import RNEncoder as _RNEncoder
+from ul.nets import WMEncoder as _WMEncoder
 
 
 __all__ = ["AtariEncoder", "WMEncoder", "AchlioptasEncoder"]
@@ -68,11 +69,26 @@ class WMEncoder(nn.Module):
     def __init__(self, path, inp_ch=3, z_ch=8) -> None:
         super().__init__()
         self.encoder = _WMEncoder(inp_ch, z_ch=z_ch)
-        self.normalize = OnlineMinMaxNorm()
         self._load_weights(path)
 
     def forward(self, x):
-        return self.normalize(self.encoder(x)[:, :4])
+        return self.encoder(x)[:, :4]
+
+    def _load_weights(self, path):
+        state = torch.load(path)["model"]
+        state = {k: v for k, v in state.items() if "encoder" in k}
+        print(f"Encoder layers: {', '.join(state.keys())}.")
+        self.load_state_dict(state)
+
+
+class RNEncoder(nn.Module):
+    def __init__(self, path, inp_ch=3, z_ch=8) -> None:
+        super().__init__()
+        self.encoder = _RNEncoder(inp_ch, z_ch=z_ch)
+        self._load_weights(path)
+
+    def forward(self, x):
+        return self.encoder(x)[:, :4]
 
     def _load_weights(self, path):
         state = torch.load(path)["model"]

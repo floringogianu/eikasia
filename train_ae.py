@@ -45,9 +45,6 @@ def run(opt):
     trn_set = get_dset(opt.dset.name, split="trn", **opt.dset.args)
     val_set = get_dset(opt.dset.name, split="val", **opt.dset.args)
 
-    # webdatasets are tricky, figure out how to get the size of the input data
-    opt.model.args["inp_ch"] = 3  # TODO: fix this
-
     # get model
     model = AutoEncoderKL.from_opt(opt.model).to(device)
     print(model)

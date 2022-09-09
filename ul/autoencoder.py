@@ -1,11 +1,12 @@
 from functools import partial
+from inspect import getargs
 from itertools import chain
 
 import torch
 import torch.nn as nn
 from torch.nn.utils import parameters_to_vector as param2vec
 
-from ul.nets import WMDecoder, WMEncoder
+import ul.nets as nets
 from ul.priors import DiagonalGaussianDistribution
 import ul.losses as losses
 
@@ -13,10 +14,10 @@ __all__ = ["AutoEncoderKL"]
 
 
 class AutoEncoderKL(nn.Module):
-    def __init__(self, inp_ch, z_dim=4, loss=None, optims=None) -> None:
+    def __init__(self, encoder, decoder, loss=None, optims=None) -> None:
         super().__init__()
-        self.encoder = WMEncoder(inp_ch, z_ch=2 * z_dim)
-        self.decoder = WMDecoder(inp_ch, z_ch=z_dim)
+        self.encoder = encoder
+        self.decoder = decoder
         self.ante_emb = nn.Identity()#nn.Conv2d(2 * z_dim, 2 * z_dim, 1, 1)
         self.post_emb = nn.Identity()#nn.Conv2d(z_dim, z_dim, 1, 1)
         self.loss = loss
@@ -33,11 +34,13 @@ class AutoEncoderKL(nn.Module):
 
     @classmethod
     def from_opt(cls, opt):
+        encoder = getattr(nets, opt.encoder.name)(**opt.encoder.args)
+        decoder = getattr(nets, opt.decoder.name)(**opt.encoder.args)
         optim = partial(getattr(torch.optim, opt.optim.name), **opt.optim.args)
         loss = getattr(losses, opt.loss.name)(**opt.loss.args)
         return cls(
-            opt.args["inp_ch"],
-            z_dim=opt.args["z_dim"],
+            encoder,
+            decoder,
             loss=loss,
             optims={"g": optim, "d": optim},  # in this case they share settings
         )
@@ -105,4 +108,4 @@ class AutoEncoderKL(nn.Module):
         return losses, logs
 
     def _get_last_layer(self):
-        return self.decoder.layers[-1].weight
+        return self.decoder.last_layer

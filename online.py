@@ -92,9 +92,17 @@ class CoolAgent:
         self._transition = []
         self.total_steps = 0
 
+    @staticmethod
+    def _set_ckpt_path(opt):
+        root = opt.estimator.encoder.args.pop("root")
+        ckpt_idx = opt.estimator.encoder.args.pop("ckpt_idx")
+        opt.estimator.encoder.args["path"] = f"{root}/model_{ckpt_idx}.pkl"
+        return opt
+
     @classmethod
     def init_from_opts(cls, opt):
-        hist_len = opt.agent.args["hist_len"]
+
+        opt = cls._set_ckpt_path(opt)
         encoder = Encoder(
             opt.estimator.encoder.name,
             opt.estimator.encoder.args,
@@ -104,6 +112,7 @@ class CoolAgent:
         # infer the expected input size of the qvalue network
         inp_ch = opt.estimator.encoder.args["inp_ch"]
         z_dims = _get_latent_dims(encoder, (1, 1, inp_ch, *opt.env.args["obs_dims"]))
+        hist_len = opt.agent.args["hist_len"]
         print(z_dims, hist_len)
         z_size = hist_len * np.prod(z_dims)
         qval_fn = MLPQ(z_size, opt.action_num, **opt.estimator.qval_net.args)
