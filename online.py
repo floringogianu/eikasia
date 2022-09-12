@@ -114,7 +114,7 @@ class CoolAgent:
         inp_ch = 3 if opt.env.args["obs_mode"] == "RGB" else 1
         z_dims = _get_latent_dims(encoder, (1, 1, inp_ch, *opt.env.args["obs_dims"]))
         hist_len = opt.agent.args["hist_len"]
-        print(z_dims, hist_len)
+        rlog.info("Infered dim={} and hist_len={}".format(z_dims, hist_len))
         z_size = hist_len * np.prod(z_dims)
         qval_fn = getattr(estimators, opt.estimator.qval_net.name)(
             z_size, opt.action_num, **opt.estimator.qval_net.args

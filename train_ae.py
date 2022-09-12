@@ -6,6 +6,7 @@ import torch
 from liftoff import parse_opts
 from torchvision.utils import save_image
 
+from ul.models import ObservationRewardModel
 from ul.autoencoder import AutoEncoderKL
 from ul.data_loading import get_dset, get_loader
 
@@ -46,7 +47,8 @@ def run(opt):
     val_set = get_dset(opt.dset.name, split="val", **opt.dset.args)
 
     # get model
-    model = AutoEncoderKL.from_opt(opt.model).to(device)
+    # model = AutoEncoderKL.from_opt(opt.model).to(device)
+    model = ObservationRewardModel(opt).to(device)
     print(model)
 
     # config dataloader

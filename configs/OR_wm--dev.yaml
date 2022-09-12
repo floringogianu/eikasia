@@ -1,0 +1,49 @@
+experiment: OM-WM
+
+epochs: 10
+device: cuda
+
+dset:
+  name: Atari
+  args_:
+    shuffle: 1000
+    trn_path: ./data/6games/{0000..0490}.tar
+    val_path: ./data/6games/{0491..0500}.tar
+
+loader:
+  args_:
+    batch_size: 32
+    num_workers: 8
+    shuffle: 1000
+
+model:
+  name: ObservationRewardModel
+  observation_model: AutoencoderKL
+    z_dim: 4
+    single_pass: yes
+
+    encoder:
+      name: WMEncoder  # look under ul/nets/
+      args_:
+        inp_ch: 3
+        group_norm: True
+    decoder:
+      name: WMDecoder  # look under ul/nets/
+      args_:
+        out_ch: 3
+        group_norm: True
+  reward_model: RewardModel
+    args_: null
+
+  loss:
+    name: LPIPSWithDiscriminator
+    args_:
+      disc_start: 50_000
+      disc_weight: 0.5
+      kl_weight: 1.0e-06
+
+  optim:
+    name: Adam
+    args_:
+      lr: 4.5e-06
+      betas: [0.5, 0.9]
