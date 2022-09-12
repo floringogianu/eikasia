@@ -1,5 +1,6 @@
 # DQN hyperparams following Rainbow. Follows hyperparams from Dopamine:
 # github.com/google/dopamine/blob/master/dopamine/agents/dqn/configs/dqn.gin
+experiment: M-DQN
 
 env:
   name: SpaceInvaders
@@ -8,7 +9,6 @@ env:
     obs_mode: RGB
     obs_dims: [96, 96]
 
-experiment: M-DQN
 device: cuda
 save: yes
 replay_save_freq: 2
@@ -35,11 +35,11 @@ replay_:
 
 estimator:
   encoder:
-    name: WMEncoder  # look under ul/nets/
+    name: RNEncoder  # look under ul/nets/
     freeze: yes
     args_:
-      root: results/2022Sep07-140747_6gamesGN/0000_atari--dev/0
-      ckpt_idx: 230_000
+      root: results/2022Sep10-002510_6g_ae_rn/0000_ae_RN--dev/0/
+      ckpt_idx: None
       inp_ch: 3
   qval_net:
     name: MLPQ

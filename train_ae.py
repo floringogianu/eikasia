@@ -67,13 +67,14 @@ def run(opt):
                 sample_model(
                     [trn_set, val_set],
                     model,
-                    f"{samples_path.as_posix()}/{step:05d}.png",
+                    f"{samples_path.as_posix()}/{model.step:08d}.png",
                     device,
                 )
 
-            if step % 10_000 == 0 and step != 0:
+            if step % 50_000 == 0 and step != 0:
                 torch.save(
-                    {"model": model.state_dict()}, f"{opt.out_dir}/model_{step:03d}.pkl"
+                    {"model": model.state_dict()},
+                    f"{opt.out_dir}/model_{model.step:08d}.pkl",
                 )
 
 

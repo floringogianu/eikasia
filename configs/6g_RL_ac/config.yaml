@@ -1,0 +1,10 @@
+env:
+  name: [Asterix, Breakout, Enduro, Seaquest, MsPacman, SpaceInvaders]
+
+estimator:
+  qval_net:
+    name: ["MLPQ", "MLPQ_C"]
+    args_:
+      fc_layers:
+        - [512, 512]
+        - [256, 256, 256]

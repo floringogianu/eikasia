@@ -10,8 +10,8 @@ from liftoff import parse_opts
 
 import common.io_utils as ioutil
 from common.ale import ALE
+from rl import estimators
 from rl.agents import AGENTS
-from rl.estimators import Encoder, MLPQ
 from rl.replay import ExperienceReplay
 from rl.rl_routines import Episode, validate
 
@@ -94,28 +94,31 @@ class CoolAgent:
 
     @staticmethod
     def _set_ckpt_path(opt):
-        root = opt.estimator.encoder.args.pop("root")
-        ckpt_idx = opt.estimator.encoder.args.pop("ckpt_idx")
-        opt.estimator.encoder.args["path"] = f"{root}/model_{ckpt_idx}.pkl"
+        if "root" in opt.estimator.encoder.args:
+            root = opt.estimator.encoder.args.pop("root")
+            ckpt_idx = opt.estimator.encoder.args.pop("ckpt_idx")
+            opt.estimator.encoder.args["path"] = f"{root}/model_{ckpt_idx}.pkl"
         return opt
 
     @classmethod
     def init_from_opts(cls, opt):
 
         opt = cls._set_ckpt_path(opt)
-        encoder = Encoder(
+        encoder = estimators.Encoder(
             opt.estimator.encoder.name,
             opt.estimator.encoder.args,
             opt.estimator.encoder.freeze,
         )
 
         # infer the expected input size of the qvalue network
-        inp_ch = opt.estimator.encoder.args["inp_ch"]
+        inp_ch = 3 if opt.env.args["obs_mode"] == "RGB" else 1
         z_dims = _get_latent_dims(encoder, (1, 1, inp_ch, *opt.env.args["obs_dims"]))
         hist_len = opt.agent.args["hist_len"]
         print(z_dims, hist_len)
         z_size = hist_len * np.prod(z_dims)
-        qval_fn = MLPQ(z_size, opt.action_num, **opt.estimator.qval_net.args)
+        qval_fn = getattr(estimators, opt.estimator.qval_net.name)(
+            z_size, opt.action_num, **opt.estimator.qval_net.args
+        )
 
         encoder.to(opt.device)
         qval_fn.to(opt.device)

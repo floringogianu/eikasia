@@ -4,7 +4,7 @@ env:
 estimator:
   encoder:
     args_:
-      ckpt_idx: [410_000]
+      ckpt_idx: [140_000]
   qval_net:
     args_:
       fc_layers:

@@ -1,0 +1,55 @@
+# DQN hyperparams following Rainbow. Follows hyperparams from Dopamine:
+# github.com/google/dopamine/blob/master/dopamine/agents/dqn/configs/dqn.gin
+experiment: M-DQN
+
+env:
+  name: SpaceInvaders
+  args_:
+    history_length: 1  # we treat it in the agent this time
+    obs_mode: L
+    obs_dims: [96, 96]
+
+device: cuda
+save: yes
+replay_save_freq: 2
+
+epoch_cnt: 50
+train_step_cnt: 250_000
+valid_step_cnt: 125_000
+val_epsilon: 0.001  # validation epsilon greedy
+
+agent:
+  name: M-DQN
+  args_:
+    epsilon: [linear, 1.0, 0.01, 250000, 20_000]
+    gamma: 0.99
+    loss_fn: MSELoss
+    hist_len: 4
+    update_freq: 4
+    target_update_freq: 8000
+
+replay_:
+  capacity: 1_000_000
+  batch_size: 32
+  device: cpu
+
+estimator:
+  encoder:
+    name: AchlioptasEncoder  # look under ul/nets/
+    freeze: yes
+    args_:
+      inp_features: 9216
+      out_features: 1024
+      out_ch: 4
+  qval_net:
+    name: MLPQ_C
+    args_:
+      fc_layers: [256, 256, 256]
+      initializer: "xavier_uniform"  # this field can be missing
+      inp_ch: 4
+
+optim:
+  name: "Adam"
+  args_:
+    lr: 0.0000625
+    eps: 0.0001500

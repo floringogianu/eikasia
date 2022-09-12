@@ -218,7 +218,7 @@ class MLPQ_C(nn.Module):
         init_fns = list(INIT_FNS.keys())
         assert initializer in init_fns, f"Only implements {init_fns}."
 
-        self.clin = CLinear(input_size, fc_layers[0], inp_ch)
+        self.clin = CLinear(input_size // inp_ch, fc_layers[0], inp_ch)
         self.head = get_mlp([*fc_layers, action_no])
 
         # reset the head
