@@ -1,4 +1,5 @@
 from functools import partial
+from turtle import forward
 
 import numpy as np
 import torch
@@ -8,14 +9,25 @@ from torch.nn.utils import parameters_to_vector as param2vec
 from .autoencoder import AutoEncoderKL
 
 
+def get_mlp(dims, activation_fn="ReLU"):
+    """A generic MLP."""
+    layers = []
+    for i in range(len(dims) - 1):
+        in_dim, out_dim = dims[i : i + 2]
+        layers.append(nn.Linear(in_dim, out_dim, bias=True))
+        if i != (len(dims) - 2):
+            layers.append(getattr(nn, activation_fn)())
+    return nn.Sequential(nn.Flatten(), *layers)
+
+
 class RewardModel(nn.Module):
-    def __init__(self, inp_size, optimizer) -> None:
+    def __init__(self, layers, optimizer) -> None:
         super().__init__()
-        self.estimator = nn.Linear(inp_size, 1, bias=False)
+        self.estimator = get_mlp(layers)
         self.optimizer = optimizer(self.estimator.parameters())
 
     def forward(self, x):
-        return self.estimator(x.flatten(1))
+        return self.estimator(x)
 
 
 class ObservationRewardModel(nn.Module):
@@ -26,22 +38,41 @@ class ObservationRewardModel(nn.Module):
         self._step = 0
 
     @classmethod
-    def init_from_opts(cls, opt):
-        autoencoder = AutoEncoderKL.from_opt(opt.model.observation_model)
-        z_dim = cls._get_latent_dims(autoencoder.encoder, opt)
-        optim = (partial(getattr(torch.optim, opt.optim.name), **opt.optim.args),)
-        reward_model = RewardModel(np.prod(z_dim), optim)
+    def from_opt(cls, opt):
+        autoencoder = AutoEncoderKL.from_opt(opt.observation_model)
+        reward_model = RewardModel(
+            [
+                np.prod(cls._get_latent_dims(autoencoder.encoder)),
+                *opt.reward_model.args["layers"],
+                1,
+            ],
+            partial(
+                getattr(torch.optim, opt.reward_model.optim.name),
+                **opt.reward_model.optim.args
+            ),
+        )
         return cls(autoencoder, reward_model)
 
+    def forward(self, obs):
+        obs_, pz_obs, (h, z) = self.observation_model(obs)
+        reward_ = self.reward_model(h[:, :4])
+        return obs_, pz_obs, (h, z, reward_)
+
+    def decoder(self, z):
+        return self.observation_model.decoder(z)
+
     def train(self, x):
-        obs, reward = x
+        obs, ard = x
+        obs = obs.squeeze()
+        reward = torch.stack([el["reward"] for el in ard]).float().to(obs.device)
+
         obs_, pz_obs, (h, z) = self.observation_model(obs)
         reward_ = self.reward_model(h[:, :4])
 
         # alias the optimizers:
         optim_g = self.observation_model.optim_g
         optim_d = self.observation_model.optim_d
-        optim_r = self.reward_model.optim
+        optim_r = self.reward_model.optimizer
 
         # compute reconstruction loss
         reconstruction_loss, log = self.observation_model.loss(
@@ -49,13 +80,13 @@ class ObservationRewardModel(nn.Module):
             obs_,
             pz_obs,
             0,  # signal we want the reconstruction loss
-            self.step,
+            self._step,
             last_layer=self.observation_model._get_last_layer(),
             split="train",
         )
 
         # reward loss
-        reward_loss = nn.functional.mse_loss(reward_, reward)
+        reward_loss = nn.functional.mse_loss(reward_, reward.clamp(-1, 1))
         loss = reconstruction_loss + reward_loss
 
         optim_g.zero_grad()
@@ -71,15 +102,15 @@ class ObservationRewardModel(nn.Module):
             obs_,
             pz_obs,
             1,  # signal we want the discriminator loss
-            self.step,
+            self._step,
             split="train",
         )
 
         optim_d.zero_grad()
-        discriminator_loss.bacward()
+        discriminator_loss.backward()
         optim_d.step()
 
-        if self.step % 100 == 0:
+        if self._step % 100 == 0:
             print(
                 (
                     "{:8d}  G_loss={:12.5f}, "
@@ -89,7 +120,7 @@ class ObservationRewardModel(nn.Module):
                     + " " * 10
                     + "R_loss={:6.3f}, |R|={:8.3f}"
                 ).format(
-                    self.step,
+                    self._step,
                     reconstruction_loss.detach().item(),
                     z.flatten().norm(),
                     h.flatten().norm(),
@@ -104,12 +135,14 @@ class ObservationRewardModel(nn.Module):
                 )
             )
 
+        self._step += 1
+
+    @property
+    def step(self):
+        return self._step
+
     @staticmethod
-    def _get_latent_dims(f, opt):
-        inp_ch = opt.estimator.encoder.args["inp_ch"]
-        inp_dim = (1, 1, inp_ch, *opt.env.args["obs_dims"])
-        x = torch.ones(
-            *inp_dim, device=list(f.parameters())[0].device, dtype=torch.uint8
-        )
+    def _get_latent_dims(f):
+        x = torch.ones(1, 3, 96, 96, device=list(f.parameters())[0].device)
         z = f(x).detach()[:, :4]
         return z.shape[1:]

@@ -1,0 +1,7 @@
+
+model:
+  reward_model:
+    args_:
+      layers:
+        - []
+        - [512, 512]

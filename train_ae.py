@@ -48,7 +48,7 @@ def run(opt):
 
     # get model
     # model = AutoEncoderKL.from_opt(opt.model).to(device)
-    model = ObservationRewardModel(opt).to(device)
+    model = ObservationRewardModel.from_opt(opt.model).to(device)
     print(model)
 
     # config dataloader
@@ -56,10 +56,10 @@ def run(opt):
 
     # train
     for _ in range(opt.epochs):
-        for step, (x, _) in enumerate(trn_ldr):
+        for step, (x, ard, _) in enumerate(trn_ldr):
             x = x.to(device)
 
-            model.train(x)
+            model.train((x, ard))
 
             if step % 5000 == 0:
                 samples_path = Path(opt.out_dir) / "samples"

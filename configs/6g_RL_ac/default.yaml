@@ -39,7 +39,7 @@ estimator:
     freeze: yes
     args_:
       inp_features: 9216
-      out_features: 1024
+      out_features: 512
       out_ch: 4
   qval_net:
     name: MLPQ_C

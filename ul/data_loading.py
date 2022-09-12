@@ -16,7 +16,7 @@ def get_loader(dset, **kwargs):
             kwargs.get(k) for k in ["shuffle", "num_workers", "batch_size"]
         )
         loader = wds.WebLoader(dset, num_workers=num_workers)
-        loader = loader.unbatched().shuffle(shuffle).batched(batch_size)
+        loader = loader.shuffle(shuffle).batched(batch_size)
         return loader
     return DataLoader(dset, **kwargs)
 
@@ -56,6 +56,6 @@ def get_atari(path, shuffle=1000):
         wds.WebDataset(path, shardshuffle=True)
         .shuffle(shuffle)
         .decode("rgb8")
-        .to_tuple("state.png", "__key__")
+        .to_tuple("state.png", "ard.msg", "__key__")
         .map_tuple(prep)
     )
