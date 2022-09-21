@@ -94,10 +94,17 @@ class CoolAgent:
 
     @staticmethod
     def _set_ckpt_path(opt):
-        if "root" in opt.estimator.encoder.args:
-            root = opt.estimator.encoder.args.pop("root")
-            ckpt_idx = opt.estimator.encoder.args.pop("ckpt_idx")
-            opt.estimator.encoder.args["path"] = f"{root}/model_{ckpt_idx}.pkl"
+        if "root" not in opt.estimator.encoder.args:
+            return opt
+        root = opt.estimator.encoder.args.pop("root")
+        ckpt_idx = opt.estimator.encoder.args.pop("ckpt_idx")
+        if opt.estimator.encoder.name == "AtariEncoder":
+            path = "{}/{}/{}/model_{:08d}.gz".format(
+                root, opt.env.name, opt.run_id, ckpt_idx
+            )
+        else:
+            path = f"{root}/model_{ckpt_idx:08d}.pkl"
+        opt.estimator.encoder.args["path"] = path
         return opt
 
     @classmethod
@@ -114,10 +121,16 @@ class CoolAgent:
         inp_ch = 3 if opt.env.args["obs_mode"] == "RGB" else 1
         z_dims = _get_latent_dims(encoder, (1, 1, inp_ch, *opt.env.args["obs_dims"]))
         hist_len = opt.agent.args["hist_len"]
-        rlog.info("Infered dim={} and hist_len={}".format(z_dims, hist_len))
         z_size = hist_len * np.prod(z_dims)
+        rlog.info(
+            "Infered z_dim={}, hist_len={}  |  z_size={}".format(
+                z_dims, hist_len, z_size
+            )
+        )
+
+        # get the value function
         qval_fn = getattr(estimators, opt.estimator.qval_net.name)(
-            z_size, opt.action_num, **opt.estimator.qval_net.args
+            opt.action_num, input_size=z_size, **opt.estimator.qval_net.args
         )
 
         encoder.to(opt.device)

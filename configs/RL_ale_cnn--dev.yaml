@@ -3,11 +3,11 @@
 experiment: M-DQN
 
 env:
-  name: SpaceInvaders
+  name: Breakout
   args_:
     history_length: 1  # we treat it in the agent this time
     obs_mode: L
-    obs_dims: [96, 96]
+    obs_dims: [84, 84]
 
 device: cuda
 save: yes
@@ -35,17 +35,17 @@ replay_:
 
 estimator:
   encoder:
-    name: AchlioptasEncoder  # look under ul/nets/
+    name: AtariEncoder  # look under ul/nets/
     freeze: yes
     args_:
-      inp_features: 9216
-      out_features: 24
-      out_ch: 4
+      root: /data/models/MDQN_modern
+      ckpt_idx: 50_000_000
+      inp_ch: 4
   qval_net:
     name: CNN
     args_:
-      inp_ch: 4
-      cn_layers: [[16, 1, 1]]
+      inp_ch: 64
+      cn_layers: [[64, 1, 1]]
       fc_layers: [512]
       initializer: "xavier_uniform"  # this field can be missing
 

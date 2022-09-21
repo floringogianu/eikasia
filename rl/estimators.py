@@ -1,26 +1,15 @@
 """ Neural Network architecture for Atari games.
 """
-from functools import partial
-from itertools import chain
-from math import sqrt
 
+from functools import partial
+
+import numpy as np
 import torch
 import torch.nn as nn
+
 import rl.encoders as encoders
 
-
 __all__ = ["AtariNet", "Encoder", "MLPQ", "MLPQ_C"]
-
-
-def get_head(hidden_size, out_size, shared_bias=False):
-    """Configures the default Atari output layers."""
-    fc0 = nn.Linear(64 * 7 * 7, hidden_size)
-    fc1 = (
-        SharedBiasLinear(hidden_size, out_size)
-        if shared_bias
-        else nn.Linear(hidden_size, out_size)
-    )
-    return nn.Sequential(fc0, nn.ReLU(inplace=True), fc1)
 
 
 def no_grad(module):
@@ -50,24 +39,19 @@ def variance_scaling_uniform_(tensor, scale=0.1, mode="fan_in"):
     return weights
 
 
-class SharedBiasLinear(nn.Linear):
-    """Applies a linear transformation to the incoming data: `y = xA^T + b`.
-        As opposed to the default Linear layer it has a shared bias term.
-        This is employed for example in Double-DQN.
+def _init(m, init_fn):
+    if isinstance(m, (nn.Linear, CLinear, nn.Conv2d)):
+        init_fn(m.weight)
+        if hasattr(m, "bias"):
+            m.bias.data.zero_()
 
-    Args:
-        in_features: size of each input sample
-        out_features: size of each output sample
-    """
 
-    def __init__(self, in_features, out_features):
-        super(SharedBiasLinear, self).__init__(in_features, out_features, True)
-        self.bias = nn.Parameter(torch.Tensor(1))
-
-    def extra_repr(self):
-        return "in_features={}, out_features={}, bias=shared".format(
-            self.in_features, self.out_features
-        )
+INIT_FNS = {
+    "xavier_uniform": partial(_init, init_fn=nn.init.xavier_uniform_),
+    "variance_scaling_uniform": partial(
+        _init, init_fn=partial(variance_scaling_uniform_, scale=1.0 / np.sqrt(3.0))
+    ),
+}
 
 
 def get_mlp(dims, activation_fn="ReLU"):
@@ -79,21 +63,6 @@ def get_mlp(dims, activation_fn="ReLU"):
         if i != (len(dims) - 2):
             layers.append(getattr(nn, activation_fn)())
     return nn.Sequential(nn.Flatten(), *layers)
-
-
-def _init(m, init_fn):
-    if isinstance(m, (nn.Linear, CLinear, nn.Conv2d)):
-        init_fn(m.weight)
-        if hasattr(m, "bias"):
-            m.bias.data.zero_()
-
-
-INIT_FNS = {
-    "xavier_uniform": partial(_init, init_fn=nn.init.xavier_uniform_),
-    "variance_scaling_uniform": partial(
-        _init, init_fn=partial(variance_scaling_uniform_, scale=1.0 / sqrt(3.0))
-    ),
-}
 
 
 class Encoder(nn.Module):
@@ -124,9 +93,10 @@ class MLPQ(nn.Module):
 
     def __init__(  # pylint: disable=bad-continuation
         self,
-        input_size,
         action_no,
-        fc_layers=None,
+        *,
+        input_size,
+        fc_layers,
         initializer="xavier_uniform",
         support=None,
         **kwargs,
@@ -177,13 +147,75 @@ class MLPQ(nn.Module):
         return self._support
 
 
+# Some experiments with convolutional estimators
+
+
+def _get_size_after_convs(inp_size, convs):
+    """Assuming squares."""
+    for _, k, s in convs:
+        inp_size = np.floor((inp_size - 1 * (k - 1) - 1) / s + 1)
+    return int(inp_size)
+
+
+def get_cnn(inp_ch, cn_layers):
+    layers = []
+    for out_ch, k, s in cn_layers:
+        layers += [
+            nn.Conv2d(inp_ch, out_ch, kernel_size=k, stride=s),
+            nn.ReLU(inplace=True),
+        ]
+        inp_ch = out_ch
+    return nn.Sequential(*layers)
+
+
+class CNN(nn.Module):
+    def __init__(
+        self,
+        action_no,
+        *,
+        input_size,
+        inp_ch=1,
+        cn_layers=None,
+        fc_layers=None,
+        initializer="xavier_uniform",
+        **kwargs,
+    ) -> None:
+        super().__init__()
+        init_fns = list(INIT_FNS.keys())
+        assert initializer in init_fns, f"Only implements {init_fns}."
+
+        cn_layers = cn_layers or [(16, 3, 1), (16, 3, 1)]
+        self.conv = get_cnn(inp_ch * 4, cn_layers)
+
+        w = _get_size_after_convs(
+            np.sqrt(input_size // inp_ch // 4),
+            cn_layers,
+        )
+        self.head = get_mlp([w**2 * cn_layers[-1][0], *fc_layers, action_no])
+
+        # reset the head
+        self.head.apply(INIT_FNS[initializer])
+        self.conv.apply(INIT_FNS[initializer])
+
+    def forward(self, x):
+        assert x.dtype == torch.float32, "Expecting input of type Float32."
+        assert x.ndim >= 4, f"Expecting input of dimension B,T,C,... not {x.shape}."
+
+        x = x.view(x.shape[0], -1, *x.shape[-2:])  # collapse TxC
+        x = self.conv(x)
+        return self.head(x)
+
+
 # Some experiments with aggregating channel-level information
 # using linear layers.
 
 
 class CLinear(nn.Module):
     def __init__(  # pylint: disable=bad-continuation
-        self, inp_features, out_features, inp_channels=1
+        self,
+        inp_features,
+        out_features,
+        inp_channels=1,
     ):
         super().__init__()
         self.inp_features = inp_features
@@ -206,8 +238,9 @@ class CLinear(nn.Module):
 class MLPQ_C(nn.Module):
     def __init__(  # pylint: disable=bad-continuation
         self,
-        input_size,
         action_no,
+        *,
+        input_size=None,
         inp_ch=1,
         fc_layers=None,
         initializer="xavier_uniform",
@@ -279,14 +312,6 @@ class AtariNet(nn.Module):
 
         self.reset_parameters()
 
-        # We allways compute spectral norm except when None or notrace
-        if spectral is not None:
-            self.__hooked_layers = hook_spectral_normalization(
-                spectral,
-                chain(self.__features.named_children(), self.__head.named_children()),
-                **kwargs,
-            )
-
     def forward(self, x, probs=False, log_probs=False):
         # assert x.dtype == torch.uint8, "The model expects states of type ByteTensor"
         x = x.float().div(255)
@@ -325,7 +350,7 @@ class AtariNet(nn.Module):
         init_ = (
             nn.init.xavier_uniform_
             if self.__initializer == "xavier_uniform"
-            else partial(variance_scaling_uniform_, scale=1.0 / sqrt(3.0))
+            else partial(variance_scaling_uniform_, scale=1.0 / np.sqrt(3.0))
         )
 
         for module in self.modules():

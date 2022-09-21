@@ -6,7 +6,7 @@ env:
   name: SpaceInvaders
   args_:
     history_length: 1  # we treat it in the agent this time
-    obs_mode: L
+    obs_mode: RGB
     obs_dims: [96, 96]
 
 device: cuda
@@ -35,17 +35,16 @@ replay_:
 
 estimator:
   encoder:
-    name: AchlioptasEncoder  # look under ul/nets/
+    name: WMEncoder  # look under ul/nets/
     freeze: yes
     args_:
-      inp_features: 9216
-      out_features: 24
-      out_ch: 4
+      root: results/2022Sep12-213046_6g_OR_wm/0000_model.reward_model.args_.layers___/0/
+      ckpt_idx: null
+      inp_ch: 3
   qval_net:
     name: CNN
     args_:
       inp_ch: 4
-      cn_layers: [[16, 1, 1]]
       fc_layers: [512]
       initializer: "xavier_uniform"  # this field can be missing
 

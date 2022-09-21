@@ -17,7 +17,7 @@ class AtariEncoder(nn.Module):
         self.conv0 = nn.Conv2d(inp_ch, 32, kernel_size=8, stride=4)
         self.conv1 = nn.Conv2d(32, 64, kernel_size=4, stride=2)
         self.conv2 = nn.Conv2d(64, 64, kernel_size=3, stride=1)
-        self.lin0 = nn.Linear(7 * 7 * 64, 512)
+        # self.lin0 = nn.Linear(7 * 7 * 64, 512)
         expand = T.Lambda(lambda x: x.expand(-1, 4, -1, -1))
         self.expand = expand if inp_ch == 4 else nn.Identity()
 
@@ -26,8 +26,7 @@ class AtariEncoder(nn.Module):
     def forward(self, x):
         x = self.expand(x)
         for conv in [self.conv0, self.conv1, self.conv2]:
-            x = nn.functional.relu(conv(x))
-        x = nn.functional.relu(self.lin0(x.flatten(1)))
+            x = nn.functional.relu(conv(x), inplace=True)
         return x
 
     def _load_weights(self, path):
@@ -45,8 +44,8 @@ class AtariEncoder(nn.Module):
         lin0 = list(state.items())[-4:-2]
         state = {
             **convs,
-            "lin0.weight": lin0[0][1],
-            "lin0.bias": lin0[1][1],
+            # "lin0.weight": lin0[0][1],
+            # "lin0.bias": lin0[1][1],
         }
 
         print(f"Encoder layers: {', '.join(state.keys())}.")
@@ -65,6 +64,16 @@ class OnlineMinMaxNorm(nn.Module):
         return (x - self.min).div(self.max - self.min)
 
 
+def _match_keys(keys, state):
+    """This assumes the keys of the current model are shorter..."""
+    state_ = {}
+    for key in keys:
+        for key_, p_ in state.items():
+            if key in key_:
+                state_[key] = p_
+    return state_
+
+
 class WMEncoder(nn.Module):
     def __init__(self, path, inp_ch=3, z_ch=8) -> None:
         super().__init__()
@@ -76,7 +85,7 @@ class WMEncoder(nn.Module):
 
     def _load_weights(self, path):
         state = torch.load(path)["model"]
-        state = {k: v for k, v in state.items() if "encoder" in k}
+        state = _match_keys(list(self.state_dict().keys()), state)
         print(f"Encoder layers: {', '.join(state.keys())}.")
         self.load_state_dict(state)
 
@@ -92,7 +101,7 @@ class RNEncoder(nn.Module):
 
     def _load_weights(self, path):
         state = torch.load(path)["model"]
-        state = {k: v for k, v in state.items() if "encoder" in k}
+        state = _match_keys(list(self.state_dict().keys()), state)
         print(f"Encoder layers: {', '.join(state.keys())}.")
         self.load_state_dict(state)
 
@@ -110,19 +119,22 @@ def achlioptas_init_(x):
 
 
 class AchlioptasEncoder(nn.Module):
-    def __init__(self, inp_features=7056, out_features=1024, out_ch=1) -> None:
+    def __init__(self, inp_features=7056, out_features=24, out_ch=1) -> None:
         super().__init__()
         self.inp_features = inp_features
         self.out_features = out_features
         self.out_channels = out_ch
-        w = achlioptas_init_(torch.zeros(out_ch, inp_features, out_features))
+        w = achlioptas_init_(torch.zeros(out_ch, inp_features, out_features**2))
         self.W = nn.Parameter(w, requires_grad=False)
 
     def forward(self, x):
         x = x.flatten(1)
-        return torch.einsum("bm,cmn -> bcn", x, self.W).unsqueeze(1)
+        x = torch.einsum("bm,cmn -> bcn", x, self.W).unsqueeze(1)
+        return x.view(
+            x.shape[0], self.out_channels, self.out_features, self.out_features
+        )
 
     def extra_repr(self) -> str:
-        return "in_features={}, out_features={}, channels={}".format(
-            self.inp_features, self.out_features, self.out_channels
+        return "in_features={}, out_features={} x {}, channels={}".format(
+            self.inp_features, self.out_features, self.out_features, self.out_channels
         )

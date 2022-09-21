@@ -1,0 +1,15 @@
+env:
+  name: [Asterix, Breakout, Enduro, Seaquest, MsPacman, SpaceInvaders]
+
+estimator:
+  encoder:
+    args_:
+      root:
+        - results/2022Sep12-213046_6g_OR_wm/0001_model.reward_model.args_.layers__512__512_/0
+      ckpt_idx: [2_384_376]
+  qval_net:
+    args_:
+      fc_layers:
+        - [512]
+      cn_layers:
+        - [[64, 3, 1], [64, 3, 1]]
