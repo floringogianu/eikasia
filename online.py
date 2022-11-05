@@ -119,6 +119,7 @@ class CoolAgent:
 
         # infer the expected input size of the qvalue network
         inp_ch = 3 if opt.env.args["obs_mode"] == "RGB" else 1
+        print(encoder)
         z_dims = _get_latent_dims(encoder, (1, 1, inp_ch, *opt.env.args["obs_dims"]))
         hist_len = opt.agent.args["hist_len"]
         z_size = hist_len * np.prod(z_dims)

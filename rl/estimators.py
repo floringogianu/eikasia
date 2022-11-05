@@ -2,6 +2,7 @@
 """
 
 from functools import partial
+from turtle import forward
 
 import numpy as np
 import torch
@@ -65,6 +66,15 @@ def get_mlp(dims, activation_fn="ReLU"):
     return nn.Sequential(nn.Flatten(), *layers)
 
 
+class Byte2Float(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+
+    def forward(self, x):
+        assert x.dtype == torch.uint8, "Expecting input of type uint8."
+        return x.float().div(255)
+
+
 class Encoder(nn.Module):
     """A wrapper class for the various encoders we might use."""
 
@@ -72,17 +82,15 @@ class Encoder(nn.Module):
         super(Encoder, self).__init__()
 
         self.encoder = getattr(encoders, name)(**encoder_kwargs)
+        self.cast = Byte2Float() if name != "IDEncoder" else nn.Identity()
 
         for param in self.encoder.parameters():
             param.requires_grad_(freeze)
 
     def forward(self, x):
-        assert x.dtype == torch.uint8, "Expecting input of type uint8."
         assert x.ndim == 5, f"Expecting input of dimension B,T,C,H,W, not {x.shape}."
-
         x = x.view(x.shape[0], -1, *x.shape[-2:])  # collapse TxC
-        x = x.float().div(255)
-        return self.encoder(x)
+        return self.encoder(self.cast(x))
 
 
 # An MLP to be used in conjuntion with various encoders wrapped by the Encoder.
@@ -178,26 +186,30 @@ class CNN(nn.Module):
         cn_layers=None,
         fc_layers=None,
         initializer="xavier_uniform",
+        cast=None,
+        hist_len=4,
         **kwargs,
     ) -> None:
         super().__init__()
-        init_fns = list(INIT_FNS.keys())
-        assert initializer in init_fns, f"Only implements {init_fns}."
 
+        self.cast = Byte2Float() if cast else nn.Identity()
         cn_layers = cn_layers or [(16, 3, 1), (16, 3, 1)]
-        self.conv = get_cnn(inp_ch * 4, cn_layers)
+        self.conv = get_cnn(inp_ch * hist_len, cn_layers)
 
         w = _get_size_after_convs(
-            np.sqrt(input_size // inp_ch // 4),
+            np.sqrt(input_size // inp_ch // hist_len),
             cn_layers,
         )
         self.head = get_mlp([w**2 * cn_layers[-1][0], *fc_layers, action_no])
 
-        # reset the head
+        # reset
+        init_fns = list(INIT_FNS.keys())
+        assert initializer in init_fns, f"Only implements {init_fns}."
         self.head.apply(INIT_FNS[initializer])
         self.conv.apply(INIT_FNS[initializer])
 
     def forward(self, x):
+        x = self.cast(x)
         assert x.dtype == torch.float32, "Expecting input of type Float32."
         assert x.ndim >= 4, f"Expecting input of dimension B,T,C,... not {x.shape}."
 

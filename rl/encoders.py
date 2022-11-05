@@ -1,4 +1,5 @@
 from gzip import GzipFile
+from turtle import forward
 
 import torch
 import torch.nn as nn
@@ -8,6 +9,15 @@ from ul.nets import WMEncoder as _WMEncoder
 
 
 __all__ = ["AtariEncoder", "WMEncoder", "AchlioptasEncoder"]
+
+
+class IDEncoder(nn.Module):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__()
+        self.w1 = nn.Parameter(torch.rand(5))
+
+    def forward(self, x):
+        return x
 
 
 class AtariEncoder(nn.Module):
@@ -75,13 +85,17 @@ def _match_keys(keys, state):
 
 
 class WMEncoder(nn.Module):
-    def __init__(self, path, inp_ch=3, z_ch=8) -> None:
+    def __init__(self, path, inp_ch=3, z_ch=8, with_logvar=False) -> None:
         super().__init__()
         self.encoder = _WMEncoder(inp_ch, z_ch=z_ch)
+        self.with_logvar = with_logvar
         self._load_weights(path)
 
     def forward(self, x):
-        return self.encoder(x)[:, :4]
+        x = self.encoder(x)
+        if self.with_logvar:
+            return x
+        return x[:, :4]
 
     def _load_weights(self, path):
         state = torch.load(path)["model"]
