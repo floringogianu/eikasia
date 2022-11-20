@@ -20,7 +20,7 @@ import common.io_utils as ioutil
 class Encoder(nn.Module):
     def __init__(self) -> None:
         super().__init__()
-        self.cnv0 = nn.Conv2d(3, 16, kernel_size=8, stride=4)
+        self.cnv0 = nn.Conv2d(1, 16, kernel_size=8, stride=4)
         self.act0 = nn.ReLU()
         self.cnv1 = nn.Conv2d(16, 32, kernel_size=4, stride=2)
         self.act1 = nn.ReLU()
@@ -37,70 +37,27 @@ class Encoder(nn.Module):
         return x
 
 
-class WorldModelLoop(nn.Module):
-    def __init__(
-        self, encoder, K=8, N=512, M=256, wrmup_steps=40, act_no=18, act_emb_sz=32
-    ) -> None:
-        super().__init__()
-        self.encoder = encoder
-        self.cls_loop = nn.GRU(N, M)
-        self.opn_loop = nn.GRUCell(act_emb_sz, M)
-        self.g = nn.Sequential(nn.Linear(M, M), nn.ReLU(), nn.Linear(M, N))
-        self.act_emb = nn.Embedding(act_no, act_emb_sz)
-        self.K = K
-        self.wrmup_steps = wrmup_steps
-
-    def forward(self, obs_seq, act_seq):
-        T, B, C, W, H = obs_seq.shape
-
-        z = obs_seq.view(B * T, C, W, H)
-        z = self.encoder(z)
-        z = z.view(T, B, -1)
-
-        # split the sequences
-        wrmup_seq = z[: self.wrmup_steps]
-        train_seq = z[self.wrmup_steps :]
-        act_seq = act_seq[self.wrmup_steps :]
-
-        # closed loop integration of past timesteps
-        # first we warmup the GRU
-        if self.wrmup_steps:
-            with torch.no_grad():
-                _, warm_hn = self.cls_loop(wrmup_seq)
-        else:
-            warm_hn = None
-        # then we compute the current state at each time t, given b_{0:t-1}
-        bts, _ = self.cls_loop(train_seq, warm_hn)
-
-        # open loop prediction of the future given actions
-        output = []
-        for t, bt in enumerate(bts[: -self.K]):
-            bt_k = bt.clone()
-            horizon = []
-            for k in range(self.K):
-                # get the action embeddings at time t+k
-                act_idxs = act_seq[t + k, :]
-                act_embs = self.act_emb(act_idxs)
-                # increment the open loop gru
-                bt_k = self.opn_loop(act_embs, bt_k)
-                zt_k = self.g(bt_k)
-                horizon.append(zt_k)
-            output.append(torch.stack(horizon, dim=0))
-        return torch.stack(output)
-
-
 class WorldModel(nn.Module):
     def __init__(
-        self, encoder, K=8, N=512, M=256, wrmup_steps=40, act_no=18, act_emb_sz=32
+        self,
+        encoder,
+        K=8,
+        N=512,
+        M=256,
+        pfx_steps=40,
+        act_no=18,
+        act_emb_sz=32,
+        **kwargs,
     ) -> None:
         super().__init__()
+        self.K = K
+        self.pfx_steps = pfx_steps
+        # modules
         self.encoder = encoder
         self.cls_loop = nn.GRU(N, M)
         self.opn_loop = nn.GRU(act_emb_sz, M)
         self.g = nn.Sequential(nn.Linear(M, M), nn.ReLU(), nn.Linear(M, N))
         self.act_emb = nn.Embedding(act_no, act_emb_sz)
-        self.K = K
-        self.wrmup_steps = wrmup_steps
 
     def forward(self, obs_seq, act_seq):
         T, B, C, W, H = obs_seq.shape
@@ -110,13 +67,13 @@ class WorldModel(nn.Module):
         z = z.view(T, B, -1)
 
         # split the sequences
-        wrmup_seq = z[: self.wrmup_steps]
-        train_seq = z[self.wrmup_steps :]
-        act_seq = act_seq[self.wrmup_steps :]
+        wrmup_seq = z[: self.pfx_steps]
+        train_seq = z[self.pfx_steps :]
+        act_seq = act_seq[self.pfx_steps :]
 
         # closed loop integration of past timesteps
         # first we warmup the GRU
-        if self.wrmup_steps:
+        if self.pfx_steps:
             with torch.no_grad():
                 _, warm_hn = self.cls_loop(wrmup_seq)
         else:
@@ -150,34 +107,29 @@ class WorldModel(nn.Module):
 
 
 class BYOL(nn.Module):
-    def __init__(
-        self,
-        alpha=0.99,
-        K=8,
-        N=512,
-        M=256,
-        wrmup_steps=40,
-        act_no=18,
-        act_emb_sz=32,
-        wm=None,
-    ) -> None:
+    def __init__(self, alpha, dynamics_net, optim) -> None:
+        """Bootstrap Your Own Latent Model.
+
+        Args:
+            alpha (float): Exponentiated moving average coefficient of the target net.
+            dynamics_net (nn.Module): Dynamics prediction network.
+            optim (nn.optim.Optimizer): Optimizer for the `dynamics_net`.
+        """
         super().__init__()
-        self.dynamics = wm(
-            Encoder(),
-            K=K,
-            N=N,
-            M=M,
-            wrmup_steps=wrmup_steps,
-            act_no=act_no,
-            act_emb_sz=act_emb_sz,
-        )
-        self.target_encoder = deepcopy(self.dynamics.encoder)
-        self.optim = torch.optim.Adam(self.dynamics.parameters(), lr=0.0001)
         self.alpha = alpha
+        self.dynamics = dynamics_net
+        self.optim = optim
+        self.target_encoder = deepcopy(self.dynamics.encoder)
+
+    @classmethod
+    def from_opt(cls, opt):
+        dynet = m = WorldModel(Encoder(), **opt.dynamics_net.args)
+        optim = getattr(torch.optim, opt.optim.name)(m.parameters(), **opt.optim.args)
+        return cls(opt.alpha, dynet, optim)
 
     def train(self, obs_seq, act_seq):
         # cache some shapes
-        P, K = self.dynamics.wrmup_steps, self.dynamics.K
+        P, K = self.dynamics.pfx_steps, self.dynamics.K
 
         # unroll the world model
         predictions = self.dynamics(obs_seq, act_seq)
@@ -214,107 +166,133 @@ class BYOL(nn.Module):
         return loss.detach().cpu().item()
 
 
-def sample_seq(data, seq_len=80, burn_in=40):
-    seq_len = seq_len + burn_in
-    # concate in a deque, then yield.
-    list_of_tuples = deque(maxlen=seq_len)
+def is_valid(seq, seq_steps):
+    """Checks the sequence is not crossing shard boundaries.
+    We do this by checking the idxs are consistent.
+    """
+    diff = int(seq[-1].split(":")[-1]) - int(seq[0].split(":")[-1])
+    return diff == (seq_steps - 1)
+
+
+def sliding_window(data, seq_steps):
+    """Used by webdataset to compose sliding windows of samples.
+    A sample is usually a tuple (image, dict, __key__). The key can be used to ID the sample.
+
+    Args:
+        data (generator): sequence of samples from webdataset.
+        seq_steps (int): length of the sequence used for training.
+
+    Yields:
+        tuple: Sequences of frames, actions, rewards, etc...
+    """
+    # concate in a deque, then yield if conditions apply
+    list_of_tuples = deque(maxlen=seq_steps)
     for d in data:
         list_of_tuples.append(d)
-        tuple_of_lists = tuple(zip(*list_of_tuples))
-        if len(list_of_tuples) == seq_len:
-            state_seq = torch.stack(tuple_of_lists[0], dim=0)
-            # state_seq = torch.from_numpy(np.stack(tuple_of_lists[0], axis=0))
-            action_seq, reward_seq, done_seq = list(
-                zip(*[el.values() for el in tuple_of_lists[1]])
-            )
-            action_seq = torch.tensor(action_seq, dtype=torch.int64)
-            # reward_seq = torch.tensor(reward_seq, dtype=torch.float32)
-            yield (
-                state_seq,
-                action_seq,
-                # reward_seq,
-                # tuple_of_lists[2],
-            )
+        if len(list_of_tuples) == seq_steps:  # deque reached required size
+            tuple_of_lists = tuple(zip(*list_of_tuples))
+            keys = tuple_of_lists[2]
+            if is_valid(keys, seq_steps):  # and the sequence is valid
+                # arrange the data in tensors the size of sequence lenght
+                state_seq = (
+                    torch.from_numpy(np.stack(tuple_of_lists[0], axis=0))
+                    .unsqueeze_(1)
+                    .contiguous()
+                )
+                # actions, rewards and done are in a dictionary at this point
+                action_seq, reward_seq, done_seq = list(
+                    zip(*[el.values() for el in tuple_of_lists[1]])
+                )
+                action_seq = torch.tensor(action_seq, dtype=torch.int64)
+                # reward_seq = torch.tensor(reward_seq, dtype=torch.float32)
+                yield (state_seq, action_seq)
 
 
-def get_dloader():
-    # ckpts = (
-    #     "{00250000,33000000,44250000,48750000,15250000,"
-    #     "38250000,46250000,50000000,25750000,41750000,47500000}"
-    # )
-    ckpts = "{00250000,33000000,44250000,48750000}"
-    seeds = "1"
-    path = f"./data/MDQN_rgb/Breakout/{seeds}/{ckpts}.tar"
-    prep = T.Compose(
-        [
-            T.Lambda(lambda x: cv2.resize(x, (96, 96), interpolation=cv2.INTER_AREA)),
-            T.ToTensor(),
-        ]
+def get_dloader(opt):
+    prep = T.Lambda(
+        lambda x: cv2.resize(
+            cv2.cvtColor(x, cv2.COLOR_RGB2GRAY), (96, 96), interpolation=cv2.INTER_AREA
+        )
     )
+
+    # we use a sliding window to get sequences of total length given by
+    # the the training length + the warm-up lenght required by the RNN
+    seq_length = sum([opt.dynamics_net.args[k] for k in ("seq_steps", "pfx_steps")])
+    sequencer = partial(sliding_window, seq_steps=seq_length)
+
     dset = (
-        wds.WebDataset(path, shardshuffle=True)
+        wds.WebDataset(opt.dset.path, shardshuffle=True)
         .decode("rgb8")
         .to_tuple("state.png", "ard.msg", "__key__")
-        .map_tuple(prep)
-        .compose(sample_seq)
+        .map_tuple(prep, None, None)
+        .compose(sequencer)
+        .shuffle(opt.dset.shuffle)
+        .batched(opt.dset.batch_size)
     )
-    ldr = wds.WebLoader(dset, num_workers=16, pin_memory=True)
-    ldr = ldr.shuffle(1000).batched(32)
-    return ldr
+    ldr = wds.WebLoader(dset, **opt.loader.args)
+    ldr = ldr.unbatched().shuffle(opt.loader.shuffle).batched(opt.loader.batch_size)
+    return ldr, dset
 
 
-def flatten(a):
-    out = []
-    for sublist in a:
-        out.extend(sublist)
-    return out
+def runtime_opt_(opt):
+    """Use this method to add any runtime opt fields are necessary."""
+    opt.device = torch.device(opt.device)
+    opt.save_freq = int(opt.base_save_freq / opt.dynamics_net.args["seq_steps"])
+    return opt
 
 
 def run(opt):
     if __debug__:
         print("Code might have assertions. Use -O in liftoff.")
+    torch.backends.cudnn.benchmark = True
 
-    opt.device = torch.device(opt.device)
+    # runtime options
+    runtime_opt_(opt)
+
     ioutil.create_paths(opt)
-
     # configure rlog
     rlog.init(opt.experiment, path=opt.out_dir, tensorboard=True, relative_time=True)
     rlog.addMetrics(
         rlog.AvgMetric("trn_loss", metargs=["trn_loss", 1]),
-        rlog.FPSMetric("trn_tps", metargs=["trn_steps"]),
+        rlog.FPSMetric("trn_sps", metargs=["trn_seq"]),
     )
-    rlog.info(ioutil.config_to_string(opt))
 
     # get data and model
-    ldr = get_dloader()
-    net = BYOL(wrmup_steps=40).to(opt.device)
+    ldr, dset = get_dloader(opt)
+    model = BYOL.from_opt(opt).to(opt.device)
 
-    def fix_dims(x):
-        """Remove extra dims and make it time first, batch second."""
-        return x.squeeze().transpose(0, 1).contiguous()
+    # some logging
+    rlog.info(ioutil.config_to_string(opt))
+    rlog.info(model)
+    rlog.info(dset)
+
+    # save the resulting config
+    ioutil.save_config(opt)
 
     #
     # Let's have some space, shall we?
     #
 
-    for step, payload in enumerate(ldr):
+    for step, (obs_seq, act_seq) in enumerate(ldr):
 
         # fix the input shapes a bit
-        # obs_seq, act_seq, _ = [fix_dims(x).to(opt.device) for x in payload[:-1]]
-        obs_seq, act_seq = [fix_dims(x).to(opt.device) for x in payload]
+        act_seq = act_seq.transpose(0, 1).contiguous().to(opt.device)
+        obs_seq = obs_seq.transpose(0, 1).contiguous().to(opt.device)
+        obs_seq = obs_seq.float().div(255.0)
 
         # one training step
-        loss = net.train(obs_seq, act_seq)
-        rlog.put(trn_loss=loss, trn_steps=1)
+        loss = model.train(obs_seq, act_seq)
+        rlog.put(trn_loss=loss, trn_seq=obs_seq.shape[1])
 
-        if step % 100 == 0:
+        if step % 1000 == 0 and step != 0:
             rlog.traceAndLog(step)
 
-        if step % 50_000 == 0 and step != 0:
+        if step % opt.save_freq == 0 and step != 0:
             torch.save(
-                {"model": net.state_dict()},
+                {"model": model.state_dict()},
                 f"{opt.out_dir}/model_{step:08d}.pkl",
             )
+            rlog.info("Saved model.")
 
 
 def train_mockup(model, data):
@@ -325,15 +303,16 @@ def check_perf():
     device = torch.device("cuda")
 
     results = []
-    for (B, T, L, K) in product((16, 32), (60, 80), (0, 20, 40), (2, 4, 8)):
+    for (B, T, L) in product((16, 32), (60, 80), (0, 20, 40)):
         data = (
             torch.randn((T + L, B, 3, 96, 96), device=device),
             torch.randint(18, (T + L, B), device=device),
         )
 
         models = {
-            "BYOL(loooop)": partial(BYOL, wrmup_steps=L, K=K, wm=WorldModelLoop),
-            "BYOL(NOloop)": partial(BYOL, wrmup_steps=L, K=K, wm=WorldModel),
+            "BYOL(K=2)": partial(BYOL, pfx_steps=L, K=2),
+            "BYOL(K=4)": partial(BYOL, pfx_steps=L, K=4),
+            "BYOL(K=8)": partial(BYOL, pfx_steps=L, K=8),
         }
 
         for model_name, model_fn in models.items():
@@ -356,8 +335,8 @@ def check_perf():
 
 def main():
     """Liftoff"""
-    check_perf()
-    # run(parse_opts())
+    # check_perf()
+    run(parse_opts())
 
 
 if __name__ == "__main__":

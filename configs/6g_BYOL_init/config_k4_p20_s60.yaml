@@ -1,0 +1,5 @@
+dynamics_net:
+  args_:
+    K: [8]
+    pfx_steps: [40]
+    seq_steps: [80]

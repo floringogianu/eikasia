@@ -1,0 +1,42 @@
+experiment: BYOL
+
+epochs: 10
+device: cuda
+
+
+alpha: 0.99
+
+# divided by seq_steps gives the save freq
+base_save_freq: 1_200_000
+
+
+dynamics_net:
+  name: WorldModel
+  args_:
+    K: 4
+    M: 256
+    N: 512
+    pfx_steps: 20
+    seq_steps: 60
+    act_emb_sz: 32
+    act_no: 18
+
+optim:
+  name: Adam
+  args_:
+    lr: 0.0001
+    # betas: [0.5, 0.9]
+
+
+dset:
+  path: ./fold0/{asterix,breakout,enduro,mspacman,seaquest,spaceinvaders}_{0000..0165}.tar
+  shuffle: 4000
+  batch_size: 2
+
+loader:
+  args_:
+    batch_size: null
+    num_workers: 16
+    pin_memory: true
+  shuffle: 1000
+  batch_size: 32

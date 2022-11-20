@@ -40,15 +40,14 @@ def config_to_string(
 
 
 class YamlNamespace(Namespace):
-    """ PyLint will trigger `no-member` errors for Namespaces constructed
+    """PyLint will trigger `no-member` errors for Namespaces constructed
     from yaml files. I am using this inherited class to target an
     `ignored-class` rule in `.pylintrc`.
     """
 
 
 def create_paths(args: Namespace) -> Namespace:
-    """ Creates directories for containing experiment results.
-    """
+    """Creates directories for containing experiment results."""
     time_stamp = "{:%Y%b%d-%H%M%S}".format(datetime.now())
     if hasattr(args, "resume") and args.resume:
         # if resuming the experiment, out_dir should be the same
@@ -117,7 +116,7 @@ def recursive_update(d: dict, u: dict) -> dict:
 
 
 def _expand_from_keys(keys: list, value: object) -> dict:
-    """ Expand [a, b c] to {a: {b: {c: value}}} """
+    """Expand [a, b c] to {a: {b: {c: value}}}"""
     dct = d = {}
     while keys:
         key = keys.pop(0)
@@ -127,26 +126,26 @@ def _expand_from_keys(keys: list, value: object) -> dict:
 
 
 def expand_dict(flat_dict: dict) -> dict:
-    """ Expand {a: va, b.c: vbc, b.d: vbd} to {a: va, b: {c: vbc, d: vbd}}.
+    """Expand {a: va, b.c: vbc, b.d: vbd} to {a: va, b: {c: vbc, d: vbd}}.
 
-        Opposite of `flatten_dict`.
+    Opposite of `flatten_dict`.
 
-        If not clear from above we want:
-        {'lr':              0.0011,
-         'gamma':           0.95,
-         'dnd.size':        2000,
-         'dnd.lr':          0.77,
-         'dnd.sched.end':   0.0,
-         'dnd.sched.steps': 1000
-        }
-        to this:
-        {'lr': 0.0011,
-         'gamma': 0.95,
-         'dnd': {'size': 2000,
-                 'lr': 0.77,
-                 'sched': {'end': 0.0,
-                           'steps': 1000
-        }}}
+    If not clear from above we want:
+    {'lr':              0.0011,
+     'gamma':           0.95,
+     'dnd.size':        2000,
+     'dnd.lr':          0.77,
+     'dnd.sched.end':   0.0,
+     'dnd.sched.steps': 1000
+    }
+    to this:
+    {'lr': 0.0011,
+     'gamma': 0.95,
+     'dnd': {'size': 2000,
+             'lr': 0.77,
+             'sched': {'end': 0.0,
+                       'steps': 1000
+    }}}
     """
     exp_dict = {}
     for key, value in flat_dict.items():
@@ -165,7 +164,7 @@ def expand_dict(flat_dict: dict) -> dict:
 
 
 def get_git_info() -> str:
-    """ Return sha@branch.
+    """Return sha@branch.
     This can maybe be used when restarting experiments. We can trgger a
     warning if the current code-base does not match the one we are trying
     to resume from.
@@ -185,13 +184,13 @@ def get_git_info() -> str:
 
 
 def get_hardware():
-    """ Return some hardware info...
+    """Return some hardware info...
 
-        pip install -U gpustat
-        pip install -U py-cpuinfo
+    pip install -U gpustat
+    pip install -U py-cpuinfo
 
-        import gpustat
-        from cpuinfo import get_cpu_info
+    import gpustat
+    from cpuinfo import get_cpu_info
     """
     cpus = get_cpu_info()
     cuda_var = "CUDA_VISIBLE_DEVICES"
@@ -242,8 +241,7 @@ def add_platform_info(cfg):
 
 
 def read_config(cfg_path, info=True):
-    """ Read a config file and return a namespace.
-    """
+    """Read a config file and return a namespace."""
     with open(cfg_path) as handler:
         config_data = yaml.load(handler, Loader=yaml.SafeLoader)
     if info:
@@ -264,9 +262,8 @@ def sanitize_dict(d):
     return d_
 
 
-def save_config(cfg, path):
-    """ Save namespace or dict to disk.
-    """
+def save_config(cfg):
+    """Save namespace or dict to disk."""
     if isinstance(cfg, (Namespace, YamlNamespace)):
         cfg = namespace_to_dict(cfg)
     elif isinstance(cfg, dict):
@@ -277,7 +274,7 @@ def save_config(cfg, path):
     # who knows what I'm storing in there so...
     cfg = sanitize_dict(cfg)
 
-    with open(Path(path) / "post_cfg.yml", "w") as outfile:
+    with open(Path(cfg["out_dir"]) / "post_cfg.yml", "w") as outfile:
         yaml.safe_dump(cfg, outfile, default_flow_style=False)
 
 
@@ -333,28 +330,3 @@ def load_checkpoint(path, verbose=False, device=None):
     with open(path, "rb") as f:
         with GzipFile(fileobj=f) as inflated:
             return torch.load(inflated, map_location=device)
-
-
-def special_conv_uv_buffer_fix(estimator, state_dict):
-    """ This fucker right here applies to conv spectral hooks.
-
-        The reason is the lazy (as Florin puts it, I would just call it late)
-        initialisation of the u and v buffers whose shape depends on the data.
-
-        So before passing some data through the model, you can't really know their
-        shape, therefore we take it from the state.
-    """
-
-    def get_attr(obj, names):
-        if len(names) == 1:
-            return getattr(obj, names[0])
-        return get_attr(getattr(obj, names[0]), names[1:])
-
-    for key, value in state_dict.items():
-        if key.endswith(".weight_u") or key.endswith(".weight_v"):
-            uv_buffer = get_attr(estimator, key.split("."))
-            if uv_buffer.nelement() != value.nelement():
-                print(
-                    " >> fixing", key, ":", uv_buffer.nelement(), "->", value.nelement()
-                )
-                uv_buffer.resize_as_(value)
