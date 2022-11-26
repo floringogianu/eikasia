@@ -1,6 +1,6 @@
 """Simple Linear Probe on the empirical return."""
-from argparse import ArgumentParser
 import gc
+from argparse import ArgumentParser
 from pathlib import Path
 
 import cv2
@@ -13,6 +13,7 @@ from tqdm import tqdm
 
 from common import io_utils as ioutil
 from train_byol import ImpalaEncoder
+
 
 prep = T.Lambda(
     lambda x: cv2.resize(
@@ -45,17 +46,26 @@ def get_dset(path):
 
 
 class SamplingWorldModel(nn.Module):
-    def __init__(self, encoder, N=512, M=256) -> None:
+    def __init__(self, encoder, N=512, M=256, max_seq_size=2000) -> None:
         super().__init__()
         self.encoder = encoder
         self.cls_loop = nn.GRU(N, M)
         self.M = M
         self.N = N
+        self.max_seq_size = max_seq_size
 
     def forward(self, x):
         T, B, C, W, H = x.shape
-        # collapse time and batch and back again
-        z = self.encoder(x.view(T * B, C, W, H)).detach().view(T, B, self.N).detach()
+        # sometimes T is very large so we chunk it in order to fit it in GPU RAM.
+        z_chunks = []
+        for _x in torch.split(x, self.max_seq_size):
+            # collapse time and batch and back again
+            z_chunks.append(
+                self.encoder(_x.view(_x.shape[0] * B, C, W, H))
+                .detach()
+                .view(_x.shape[0], B, self.N)
+            )
+        z = torch.cat(z_chunks)
         # unroll
         out, _ = self.cls_loop(z)
         return out.view(T * B, self.M)
@@ -109,8 +119,6 @@ def featurize_dset(dset, net, device):
     data = [[] for _ in range(4)]
     with torch.no_grad():
         for obs_seq, Gtcd_seq, Gt_seq, done_seq in tqdm(dset, total=len(dset)):
-            if obs_seq.shape[0] > 13_000:
-                continue
             # cast to float, normalize to [0,1] and add batch and channel dimensions
             obs_seq = obs_seq.float().div(255).unsqueeze(1).unsqueeze(1).to(device)
             z_seq = net(obs_seq).detach().cpu()
@@ -127,6 +135,8 @@ def get_size(t):
 
 
 def main(opt):
+    if opt.dev:
+        print("Devel mode -------------------------------")
     root = Path(opt.root)
     cfg = ioutil.read_config(root / "cfg.yaml", info=False)
     device = torch.device("cuda")
@@ -139,7 +149,7 @@ def main(opt):
 
     # load prev results if they exist
     res_path = root / "linear_probe.pt"
-    results = torch.load(res_path) if res_path.is_file() else []
+    results = torch.load(res_path) if res_path.is_file() and not opt.dev else []
 
     # load checkpoint paths
     paths = sorted(root.glob("model_*"))
@@ -193,7 +203,12 @@ def main(opt):
             )
         )
         print("{:06d}. train: {:7.4f}  |  valid: {:7.4f}".format(*results[-1]))
-    torch.save(results, root / "linear_probe.pt")
+
+        # is this thing working?
+        gc.collect()
+
+    if not opt.dev:
+        torch.save(results, root / "linear_probe.pt")
 
 
 if __name__ == "__main__":
@@ -201,6 +216,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "root", type=str, help="path to the experiment containing models."
     )
+    parser.add_argument("-x", "--dev", dest="dev", action="store_true", help="dev mode")
+
     # parser.add_argument("game", type=str, help="game name")
     # parser.add_argument(
     #     "-e", "--episodes", default=10, type=int, help="number of episodes"
