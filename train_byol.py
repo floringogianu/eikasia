@@ -3,6 +3,7 @@ from collections import deque
 from copy import deepcopy
 from functools import partial
 from itertools import product
+import random
 
 import cv2
 import numpy as np
@@ -15,26 +16,7 @@ import webdataset as wds
 from liftoff import parse_opts
 
 import common.io_utils as ioutil
-
-
-class Encoder(nn.Module):
-    def __init__(self) -> None:
-        super().__init__()
-        self.cnv0 = nn.Conv2d(1, 16, kernel_size=8, stride=4)
-        self.act0 = nn.ReLU()
-        self.cnv1 = nn.Conv2d(16, 32, kernel_size=4, stride=2)
-        self.act1 = nn.ReLU()
-        self.cnv2 = nn.Conv2d(32, 32, kernel_size=3, stride=1)
-        self.act2 = nn.ReLU()
-        self.lin0 = nn.Linear(8 * 8 * 32, 512)
-        self.act3 = nn.ReLU()
-
-    def forward(self, x):
-        x = self.act0(self.cnv0(x))
-        x = self.act1(self.cnv1(x))
-        x = self.act2(self.cnv2(x))
-        x = self.act3(self.lin0(x.view(x.shape[0], -1)))
-        return x
+from rl.encoders import ImpalaEncoder
 
 
 class WorldModel(nn.Module):
@@ -47,6 +29,7 @@ class WorldModel(nn.Module):
         pfx_steps=40,
         act_no=18,
         act_emb_sz=32,
+        act_emb_train=False,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -58,6 +41,7 @@ class WorldModel(nn.Module):
         self.opn_loop = nn.GRU(act_emb_sz, M)
         self.g = nn.Sequential(nn.Linear(M, M), nn.ReLU(), nn.Linear(M, N))
         self.act_emb = nn.Embedding(act_no, act_emb_sz)
+        self.act_emb.weight.requires_grad = act_emb_train
 
     def forward(self, obs_seq, act_seq):
         T, B, C, W, H = obs_seq.shape
@@ -123,7 +107,8 @@ class BYOL(nn.Module):
 
     @classmethod
     def from_opt(cls, opt):
-        dynet = m = WorldModel(Encoder(), **opt.dynamics_net.args)
+        encoder = ImpalaEncoder(**opt.encoder.args)
+        dynet = m = WorldModel(encoder, **opt.dynamics_net.args)
         optim = getattr(torch.optim, opt.optim.name)(m.parameters(), **opt.optim.args)
         return cls(opt.alpha, dynet, optim)
 
@@ -174,7 +159,7 @@ def is_valid(seq, seq_steps):
     return diff == (seq_steps - 1)
 
 
-def sliding_window(data, seq_steps):
+def sliding_window(data, seq_steps, subsample):
     """Used by webdataset to compose sliding windows of samples.
     A sample is usually a tuple (image, dict, __key__). The key can be used to ID the sample.
 
@@ -187,9 +172,15 @@ def sliding_window(data, seq_steps):
     """
     # concate in a deque, then yield if conditions apply
     list_of_tuples = deque(maxlen=seq_steps)
-    for d in data:
+    for i, d in enumerate(data):
         list_of_tuples.append(d)
         if len(list_of_tuples) == seq_steps:  # deque reached required size
+
+            # we want to avoid overfitting so we only sample every other
+            # subsample / seq_steps
+            if subsample and (random.random() > (subsample / seq_steps)):
+                continue
+
             tuple_of_lists = tuple(zip(*list_of_tuples))
             keys = tuple_of_lists[2]
             if is_valid(keys, seq_steps):  # and the sequence is valid
@@ -218,7 +209,9 @@ def get_dloader(opt):
     # we use a sliding window to get sequences of total length given by
     # the the training length + the warm-up lenght required by the RNN
     seq_length = sum([opt.dynamics_net.args[k] for k in ("seq_steps", "pfx_steps")])
-    sequencer = partial(sliding_window, seq_steps=seq_length)
+    sequencer = partial(
+        sliding_window, seq_steps=seq_length, subsample=opt.dset.subsample
+    )
 
     dset = (
         wds.WebDataset(opt.dset.path, shardshuffle=True)
@@ -273,26 +266,31 @@ def run(opt):
     # Let's have some space, shall we?
     #
 
-    for step, (obs_seq, act_seq) in enumerate(ldr):
+    step = 0
+    for epoch in range(1, opt.epochs + 1):
+        for obs_seq, act_seq in ldr:
 
-        # fix the input shapes a bit
-        act_seq = act_seq.transpose(0, 1).contiguous().to(opt.device)
-        obs_seq = obs_seq.transpose(0, 1).contiguous().to(opt.device)
-        obs_seq = obs_seq.float().div(255.0)
+            # fix the input shapes a bit
+            act_seq = act_seq.transpose(0, 1).contiguous().to(opt.device)
+            obs_seq = obs_seq.transpose(0, 1).contiguous().to(opt.device)
+            obs_seq = obs_seq.float().div(255.0)
 
-        # one training step
-        loss = model.train(obs_seq, act_seq)
-        rlog.put(trn_loss=loss, trn_seq=obs_seq.shape[1])
+            # one training step
+            loss = model.train(obs_seq, act_seq)
+            rlog.put(trn_loss=loss, trn_seq=obs_seq.shape[1])
 
-        if step % 1000 == 0 and step != 0:
-            rlog.traceAndLog(step)
+            if step % 1000 == 0 and step != 0:
+                rlog.traceAndLog(step)
 
-        if step % opt.save_freq == 0 and step != 0:
-            torch.save(
-                {"model": model.state_dict()},
-                f"{opt.out_dir}/model_{step:08d}.pkl",
-            )
-            rlog.info("Saved model.")
+            if step % opt.save_freq == 0 and step != 0:
+                torch.save(
+                    {"model": model.state_dict()},
+                    f"{opt.out_dir}/model_{step:08d}.pkl",
+                )
+                rlog.info("Saved model.")
+
+            step += 1
+        rlog.info(f"Done epoch {epoch}.")
 
 
 def train_mockup(model, data):

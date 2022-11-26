@@ -4,12 +4,12 @@ from .sd_enc_dec import Upsample, Downsample
 
 
 class ResNetBlock(nn.Module):
-    def __init__(self, inp_ch, out_ch, bias=True) -> None:
+    def __init__(self, inp_ch, out_ch, bias=True, act_fn="SiLU") -> None:
         super().__init__()
         self.cnv0 = nn.Conv2d(
             inp_ch, out_ch, kernel_size=3, stride=1, padding=1, bias=bias
         )
-        self.act0 = nn.SiLU(inplace=True)
+        self.act0 = getattr(nn, act_fn)(inplace=True)
         self.cnv1 = nn.Conv2d(
             out_ch, out_ch, kernel_size=3, stride=1, padding=1, bias=bias
         )
@@ -132,7 +132,7 @@ class Decoder(nn.Module):
         for stack in self.stacks:
             x = stack(x)
         return self.out(x)
-    
+
     @property
     def last_layer(self):
         return self.out.weight

@@ -11,13 +11,64 @@ from ul.nets import WMEncoder as _WMEncoder
 __all__ = ["AtariEncoder", "WMEncoder", "AchlioptasEncoder"]
 
 
-class IDEncoder(nn.Module):
-    def __init__(self, *args, **kwargs) -> None:
+# Encoders used in BYOL
+
+
+class ResNetBlock(nn.Module):
+    def __init__(self, inp_ch, out_ch, bias=True, act_fn="ReLU") -> None:
         super().__init__()
-        self.w1 = nn.Parameter(torch.rand(5))
+        self.act0 = getattr(nn, act_fn)(inplace=True)
+        self.cnv0 = nn.Conv2d(
+            inp_ch, out_ch, kernel_size=3, stride=1, padding=1, bias=bias
+        )
+        self.act1 = getattr(nn, act_fn)(inplace=True)
+        self.cnv1 = nn.Conv2d(
+            out_ch, out_ch, kernel_size=3, stride=1, padding=1, bias=bias
+        )
 
     def forward(self, x):
+        x_ = self.cnv1(self.act1(self.cnv0(self.act0(x))))
+        return x + x_
+
+
+class ResNetStack(nn.Module):
+    def __init__(self, inp_ch, out_ch, grp_norm=0, stack_sz=2, act_fn="ReLU") -> None:
+        super().__init__()
+
+        self.cnv = nn.Conv2d(inp_ch, out_ch, kernel_size=3, stride=1, padding=1)
+        self.mxp = nn.MaxPool2d(kernel_size=3, stride=2)
+
+        self.blocks = nn.ModuleList()
+        for _ in range(stack_sz):
+            self.blocks.append(ResNetBlock(out_ch, out_ch, not grp_norm, act_fn))
+
+        if grp_norm:
+            self.blocks.append(nn.GroupNorm(num_groups=grp_norm, num_channels=out_ch))
+
+    def forward(self, x):
+        x = self.mxp(self.cnv(x))
+        for m in self.blocks:
+            x = m(x)
         return x
+
+
+class ImpalaEncoder(nn.Module):
+    """Used in Impala, BYOL, etc. Check the Impala paper for details."""
+
+    def __init__(self, inp_ch, grp_norm=1, stack_sz=2) -> None:
+        super().__init__()
+        self.stack0 = ResNetStack(inp_ch, 16, grp_norm, stack_sz)
+        self.stack1 = ResNetStack(16, 32, grp_norm, stack_sz)
+        self.stack2 = ResNetStack(32, 32, grp_norm, stack_sz)
+        self.act = nn.ReLU(inplace=True)
+        self.lin = nn.Linear(11 * 11 * 32, 512)
+
+    def forward(self, x):
+        x = self.stack2(self.stack1(self.stack0(x)))
+        return self.lin(self.act(x).flatten(1))
+
+
+# Encoders used in the Stable Diffusion Autoencoder
 
 
 class AtariEncoder(nn.Module):
@@ -123,6 +174,15 @@ class RNEncoder(nn.Module):
 # Untrained encoders
 
 
+class IDEncoder(nn.Module):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__()
+        self.w1 = nn.Parameter(torch.rand(5))
+
+    def forward(self, x):
+        return x
+
+
 def achlioptas_init_(x):
     prob = torch.tensor([1 / 6, 4 / 6, 1 / 6])
     vals = torch.tensor([3]).sqrt() * torch.tensor([1.0, 0.0, -1.0])
@@ -152,3 +212,15 @@ class AchlioptasEncoder(nn.Module):
         return "in_features={}, out_features={} x {}, channels={}".format(
             self.inp_features, self.out_features, self.out_features, self.out_channels
         )
+
+
+def main():
+    from torchinfo import summary
+
+    net = ImpalaEncoder(1)
+    # net(torch.rand(1,1,96,96)).shape
+    summary(net, input_size=(1, 1, 96, 96))
+
+
+if __name__ == "__main__":
+    main()
