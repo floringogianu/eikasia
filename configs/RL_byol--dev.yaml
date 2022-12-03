@@ -1,0 +1,54 @@
+# DQN hyperparams following Rainbow. Follows hyperparams from Dopamine:
+# github.com/google/dopamine/blob/master/dopamine/agents/dqn/configs/dqn.gin
+experiment: M-DQN
+
+env:
+  name: Breakout
+  args_:
+    history_length: 1  # we treat it in the agent this time
+    obs_mode: L
+    obs_dims: [96, 96]
+
+device: cuda
+save: yes
+replay_save_freq: 2
+
+epoch_cnt: 50
+train_step_cnt: 250_000
+valid_step_cnt: 125_000
+val_epsilon: 0.001  # validation epsilon greedy
+
+agent:
+  name: M-DQN
+  args_:
+    epsilon: [linear, 1.0, 0.01, 250000, 20_000]
+    gamma: 0.99
+    loss_fn: MSELoss
+    hist_len: 1
+    update_freq: 4
+    target_update_freq: 8000
+
+replay_:
+  capacity: 1_000_000
+  batch_size: 32
+  device: cpu
+
+estimator:
+  encoder:
+    name: _  # ??
+    freeze: yes
+    path: results/2022Nov28-141753_BYOL_w16/0001_dynamics_net.args_.K_4/0/model_01280000.pkl
+    args_:
+      stack_sz: 1
+      grp_norm: 0
+  qval_net:
+    name: MLPQ
+    args_:
+      fc_layers: [512, 512]
+      initializer: "xavier_uniform"  # this field can be missing
+
+optim:
+  name: "Adam"
+  args_:
+    lr: 0.0000625
+    eps: 0.0001500

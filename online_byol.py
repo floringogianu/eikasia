@@ -1,10 +1,10 @@
 """ Entry point. """
-from collections import deque
 from pathlib import Path
 
 import numpy as np
 import rlog
 import torch
+import torch.nn as nn
 import torch.optim as O
 from liftoff import parse_opts
 
@@ -14,30 +14,39 @@ from rl import estimators
 from rl.agents import AGENTS
 from rl.replay import ExperienceReplay
 from rl.rl_routines import Episode, validate
+from train_byol import ImpalaEncoder
 
 
-class ShortMemory:
-    def __init__(self, hist_len=1) -> None:
-        self.mem = deque([], maxlen=hist_len)
-        self.hist_len = hist_len
-        self.obs_spec = None
+class SamplingWorldModel(nn.Module):
+    """Used to encode the states, step by step."""
 
-    def push(self, x):
-        if self.obs_spec is None:
-            self.obs_spec = x.clone()
-            self.reset()
-        self.mem.append(x)
+    def __init__(self, encoder, N=512, M=256) -> None:
+        super().__init__()
+        self.encoder = encoder
+        self.cls_loop = nn.GRU(N, M)
+        self.M = M
+        self.N = N
+        self.h0 = None
 
-    def retrieve(self):
-        return torch.stack(list(self.mem), 1)
-
-    def push_retrieve(self, x):
-        self.push(x)
-        return self.retrieve()
+    def forward(self, x):
+        assert x.dtype == torch.uint8, "Observations have to be uint8."
+        x = x.float().div(255.0)
+        z = self.encoder(x.squeeze(0))
+        z = z.view(1, 1, self.N)
+        # unroll
+        out, self.h0 = self.cls_loop(z, self.h0)
+        return out  # time now becomes "history"
 
     def reset(self):
-        for _ in range(self.hist_len):
-            self.mem.append(torch.zeros_like(self.obs_spec))
+        self.h0 = torch.zeros(1, 1, self.M, device=torch.device("cuda"))
+
+    def load_checkpoint_(self, path):
+        keys = self.state_dict().keys()
+        state = torch.load(path)["model"]
+        state = {".".join(k.split(".")[1:]): v for k, v in state.items()}
+        state = {k: v for k, v in state.items() if k in keys}
+        self.load_state_dict(state)
+        return self
 
 
 class CoolValAgent:
@@ -49,22 +58,14 @@ class CoolValAgent:
             opt.action_num,
             epsilon=opt.val_epsilon,
         )
-        self.short_mem = ShortMemory(opt.agent.args["hist_len"])
 
     def act(self, obs):
-        z = self.encoder(obs).detach()
-        zz = self.short_mem.push_retrieve(z)
-        pi = self.policy_improvement.act(zz)
-        return pi
+        with torch.no_grad():
+            z = self.encoder(obs).detach()
+            return self.policy_improvement.act(z)
 
     def reset(self):
-        self.short_mem.reset()
-
-
-def _get_latent_dims(f, inp_dim):
-    x = torch.ones(*inp_dim, device=list(f.parameters())[0].device, dtype=torch.uint8)
-    z = f(x).detach()
-    return z.shape[1:]
+        self.encoder.reset()
 
 
 class CoolAgent:
@@ -73,7 +74,6 @@ class CoolAgent:
         encoder,
         qval_fn,
         replay,
-        short_mem,
         policy_improvement,
         policy_evaluation,
         update_freq,
@@ -84,7 +84,6 @@ class CoolAgent:
         self.replay = replay
         self.policy_improvement = policy_improvement
         self.policy_evaluation = policy_evaluation
-        self.short_mem = short_mem
         self.update_freq = update_freq
         self.target_update_freq = target_update_freq
 
@@ -92,43 +91,13 @@ class CoolAgent:
         self._transition = []
         self.total_steps = 0
 
-    @staticmethod
-    def _set_ckpt_path(opt):
-        if "root" not in opt.estimator.encoder.args:
-            return opt
-        root = opt.estimator.encoder.args.pop("root")
-        ckpt_idx = opt.estimator.encoder.args.pop("ckpt_idx")
-        if opt.estimator.encoder.name == "AtariEncoder":
-            path = "{}/{}/{}/model_{:08d}.gz".format(
-                root, opt.env.name, opt.run_id, ckpt_idx
-            )
-        else:
-            path = f"{root}/model_{ckpt_idx:08d}.pkl"
-        opt.estimator.encoder.args["path"] = path
-        return opt
-
     @classmethod
     def init_from_opts(cls, opt):
 
-        opt = cls._set_ckpt_path(opt)
-        encoder = estimators.Encoder(
-            opt.estimator.encoder.name,
-            opt.estimator.encoder.args,
-            opt.estimator.encoder.freeze,
-        )
+        encoder = SamplingWorldModel(ImpalaEncoder(1, **opt.estimator.encoder.args))
+        encoder = encoder.load_checkpoint_(opt.estimator.encoder.path)
 
-        # infer the expected input size of the qvalue network
-        inp_ch = 3 if opt.env.args["obs_mode"] == "RGB" else 1
-        print(encoder)
-        z_dims = _get_latent_dims(encoder, (1, 1, inp_ch, *opt.env.args["obs_dims"]))
-        hist_len = opt.agent.args["hist_len"]
-        z_size = hist_len * np.prod(z_dims)
-        rlog.info(
-            "Infered z_dim={}, hist_len={}  |  z_size={}".format(
-                z_dims, hist_len, z_size
-            )
-        )
-
+        z_size = encoder.M
         # get the value function
         qval_fn = getattr(estimators, opt.estimator.qval_net.name)(
             opt.action_num, input_size=z_size, **opt.estimator.qval_net.args
@@ -140,13 +109,12 @@ class CoolAgent:
         # replay
         if isinstance(opt.agent.args["epsilon"], list):
             opt.replay["warmup_steps"] = opt.agent.args["epsilon"][-1]
-            opt.replay["hist_len"] = hist_len
+        opt.replay["hist_len"] = opt.agent.args["hist_len"]
 
         return cls(
             encoder,
             qval_fn,
             ExperienceReplay(**opt.replay),
-            ShortMemory(hist_len),
             AGENTS[opt.agent.name]["policy_improvement"](
                 qval_fn, opt.action_num, **opt.agent.args
             ),
@@ -160,17 +128,18 @@ class CoolAgent:
         )
 
     def act(self, obs):
-        z = self.encoder(obs).detach()
-        zz = self.short_mem.push_retrieve(z)
-        pi = self.policy_improvement.act(zz)
+        with torch.no_grad():
+            z = self.encoder(obs).detach()
+            pi = self.policy_improvement.act(z)
 
         if len(self._transition) == 4:
             # self._transition contents: [prev_z, action, reward, done]
-            self.replay.push([*self._transition[:-1], zz, self._transition[-1]])
+            self.replay.push([*self._transition[:-1], z.cpu(), self._transition[-1]])
 
         # reset self._transition
         del self._transition[:]
-        self._transition = [zz, pi.action]
+        # store z_t, a_t
+        self._transition = [z.cpu(), pi.action]
 
         return pi
 
@@ -181,11 +150,13 @@ class CoolAgent:
         self.policy_evaluation.target_estimator.train()
 
         _, _, reward, _, done, _ = transition
-        # append to the transition tuple
+
+        # append to the temporary transition tuple
         self._transition += [reward, done]
 
+        # reset the hidden state when done
         if done:
-            self.short_mem.reset()
+            self.encoder.reset()
 
         # learn if a minimum no of transitions have been pushed in Replay
         if self.replay.is_ready:
@@ -224,6 +195,7 @@ def train_one_epoch(
     """Policy iteration for a given number of steps."""
 
     while True:
+        torch.cuda.empty_cache()
         # do policy improvement steps for the length of an episode
         # if _state is not None then the environment resumes from where
         # this function returned.
@@ -295,8 +267,9 @@ def run(opt):
             ioutil.config_to_string(opt), agent.encoder, agent.qval_fn
         )
     )
-    ioutil.save_config(opt, opt.out_dir)
+    ioutil.save_config(opt)
 
+    torch.cuda.empty_cache()
     # Start training
 
     last_state = None  # used by train_one_epoch to know how to resume episode.
