@@ -2,7 +2,6 @@
 """
 
 from functools import partial
-from turtle import forward
 
 import numpy as np
 import torch
