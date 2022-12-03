@@ -79,6 +79,29 @@ class SamplingWorldModel(nn.Module):
         return self
 
 
+class SamplingEncoder(ImpalaEncoder):
+    def __init__(self, inp_ch, grp_norm=1, stack_sz=2, max_seq_size=2000) -> None:
+        super().__init__(inp_ch, grp_norm, stack_sz)
+        self.max_seq_size = max_seq_size
+
+    def forward(self, x):
+        T, B, C, W, H = x.shape
+        # sometimes T is very large so we chunk it in order to fit it in GPU RAM.
+        z_chunks = []
+        for _x in torch.split(x, self.max_seq_size):
+            # collapse time and batch and back again
+            z_chunks.append(super().forward(_x.view(_x.shape[0] * B, C, W, H)).detach())
+        return torch.cat(z_chunks).view(T * B, 512)
+
+    def from_checkpoint(self, path):
+        keys = self.state_dict().keys()
+        state = torch.load(path)["model"]
+        state = {".".join(k.split(".")[2:]): v for k, v in state.items()}
+        state = {k: v for k, v in state.items() if k in keys}
+        self.load_state_dict(state)
+        return self
+
+
 def cache_dset(dset):
     for t, k in zip(dset.tensors, ["obs", "Gt_clip_disc", "Gt", "done"]):
         print(k, t.shape, t.dtype)
@@ -119,9 +142,11 @@ def featurize_dset(dset, net, device):
     data = [[] for _ in range(4)]
     with torch.no_grad():
         for obs_seq, Gtcd_seq, Gt_seq, done_seq in tqdm(dset, total=len(dset)):
+            if obs_seq.shape[0] > 13_000:
+                continue
             # cast to float, normalize to [0,1] and add batch and channel dimensions
             obs_seq = obs_seq.float().div(255).unsqueeze(1).unsqueeze(1).to(device)
-            z_seq = net(obs_seq).detach().cpu()
+            z_seq = net(obs_seq).cpu()
             # append to results
             for i, seq in enumerate([z_seq, Gtcd_seq, Gt_seq, done_seq]):
                 data[i].append(seq)
@@ -148,14 +173,19 @@ def main(opt):
     # cache_dset(dset)
 
     # load prev results if they exist
-    res_path = root / "linear_probe.pt"
+    res_path = root / f"{opt.fname}_{opt.model}.pt"
     results = torch.load(res_path) if res_path.is_file() and not opt.dev else []
+    print("Reading and writing from: ", res_path.stem)
 
     # load checkpoint paths
     paths = sorted(root.glob("model_*"))
     if results:
         paths = [p for p in paths if int(p.stem.split("_")[-1]) > results[-1][0]]
-    print("Starting from: ", paths[0].stem.split("_")[-1])
+    print(
+        "Found {} models. Starting from: {}".format(
+            len(paths), paths[0].stem.split("_")[-1]
+        )
+    )
 
     # load cached data
     trn_dset = from_cache("./data/linear_probe/trn_{00..01}")
@@ -165,15 +195,26 @@ def main(opt):
         step = int(path.stem.split("_")[-1])
 
         # model
-        wm = SamplingWorldModel(ImpalaEncoder(**cfg.encoder.args)).from_checkpoint(path)
+        if opt.model == "SamplingWorldModel":
+            enc = ImpalaEncoder(**cfg.encoder.args)
+            wm = SamplingWorldModel(enc).from_checkpoint(path)
+            z_dim = 256
+        elif opt.model == "SamplingEncoder":
+            wm = SamplingEncoder(**cfg.encoder.args).from_checkpoint(path)
+            z_dim = 512
+        else:
+            raise ValueError("Model not understood.")
         wm = wm.to(device)
 
         # features
         trn_phi_dset = featurize_dset(trn_dset, wm, device)
         val_phi_dset = featurize_dset(val_dset, wm, device)
 
+        # is this thing working?
+        gc.collect()
+
         # linear probe
-        lin = nn.Linear(256, 1).to(device)
+        lin = nn.Linear(z_dim, 1).to(device)
         trn_inp, trn_tgt = [t.to(device) for t in trn_phi_dset.tensors[:2]]
         val_inp, val_tgt = [t.to(device) for t in val_phi_dset.tensors[:2]]
         optim = torch.optim.LBFGS(
@@ -204,11 +245,8 @@ def main(opt):
         )
         print("{:06d}. train: {:7.4f}  |  valid: {:7.4f}".format(*results[-1]))
 
-        # is this thing working?
-        gc.collect()
-
     if not opt.dev:
-        torch.save(results, root / "linear_probe.pt")
+        torch.save(results, res_path)
 
 
 if __name__ == "__main__":
@@ -217,6 +255,22 @@ if __name__ == "__main__":
         "root", type=str, help="path to the experiment containing models."
     )
     parser.add_argument("-x", "--dev", dest="dev", action="store_true", help="dev mode")
+    parser.add_argument(
+        "-f",
+        "--fname",
+        dest="fname",
+        type=str,
+        default="linear_probe",
+        help="default name of the results file.",
+    )
+    parser.add_argument(
+        "-m",
+        "--model",
+        dest="model",
+        type=str,
+        default="SamplingWorldModel",
+        help="name of the feature extractor.",
+    )
 
     # parser.add_argument("game", type=str, help="game name")
     # parser.add_argument(
