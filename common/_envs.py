@@ -3,13 +3,9 @@ provided by OpenAI Gym.
 """
 from collections import deque
 
-import gym
-import numpy as np
 import torch
 from ale_py import ALEInterface, LoggerMode, roms
-from gym.spaces import Box, Discrete
-from rich.columns import Columns
-
+from gym.spaces import Discrete
 
 try:
     import cv2
@@ -19,7 +15,7 @@ except ModuleNotFoundError as err:
         "Try `conda install -c conda-forge opencv`.",
     )
 
-__all__ = ["MinAtar", "ALE"]
+__all__ = ["ALE"]
 
 
 def _get_rom(game):
