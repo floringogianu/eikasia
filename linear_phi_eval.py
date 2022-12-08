@@ -245,8 +245,9 @@ def main(opt):
         )
         print("{:06d}. train: {:7.4f}  |  valid: {:7.4f}".format(*results[-1]))
 
-    if not opt.dev:
-        torch.save(results, res_path)
+        # save after every iteration
+        if not opt.dev:
+            torch.save(results, res_path)
 
 
 if __name__ == "__main__":

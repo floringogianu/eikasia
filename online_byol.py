@@ -37,8 +37,8 @@ class SamplingWorldModel(nn.Module):
         out, self.h0 = self.cls_loop(z, self.h0)
         return out  # time now becomes "history"
 
-    def reset(self):
-        self.h0 = torch.zeros(1, 1, self.M, device=torch.device("cuda"))
+    def reset(self, device=torch.device("cuda")):
+        self.h0 = torch.zeros(1, 1, self.M, device=device)
 
     def load_checkpoint_(self, path):
         keys = self.state_dict().keys()
