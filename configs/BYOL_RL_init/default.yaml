@@ -38,7 +38,7 @@ estimator:
     name: _  # ??
     freeze: yes
     root: results/2022Nov28-141753_BYOL_w16/0001_dynamics_net.args_.K_4/0
-    cidx: 3200000
+    cidx: 01320000
     args_:
       stack_sz: 1
       grp_norm: 0

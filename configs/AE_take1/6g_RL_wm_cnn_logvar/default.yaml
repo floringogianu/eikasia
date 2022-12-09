@@ -3,10 +3,10 @@
 experiment: M-DQN
 
 env:
-  name: Breakout
+  name: SpaceInvaders
   args_:
     history_length: 1  # we treat it in the agent this time
-    obs_mode: L
+    obs_mode: RGB
     obs_dims: [96, 96]
 
 device: cuda
@@ -24,7 +24,7 @@ agent:
     epsilon: [linear, 1.0, 0.01, 250000, 20_000]
     gamma: 0.99
     loss_fn: MSELoss
-    hist_len: 1
+    hist_len: 4
     update_freq: 4
     target_update_freq: 8000
 
@@ -35,17 +35,18 @@ replay_:
 
 estimator:
   encoder:
-    name: _  # ??
+    name: WMEncoder  # look under ul/nets/
     freeze: yes
-    root: results/2022Nov28-141753_BYOL_w16/0001_dynamics_net.args_.K_4/0
-    cidx: 3200000
     args_:
-      stack_sz: 1
-      grp_norm: 0
+      root: results/2022Sep12-213046_6g_OR_wm/0000_model.reward_model.args_.layers___/0/
+      ckpt_idx: null
+      inp_ch: 3
+      with_logvar: yes
   qval_net:
-    name: MLPQ
+    name: CNN
     args_:
-      fc_layers: [512, 512]
+      inp_ch: 8  # 2x when with_logvar
+      fc_layers: [512]
       initializer: "xavier_uniform"  # this field can be missing
 
 optim:

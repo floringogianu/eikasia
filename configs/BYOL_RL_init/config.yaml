@@ -2,11 +2,11 @@ env:
   name: [Asterix, Breakout, Enduro, Seaquest, MsPacman, SpaceInvaders]
 
 estimator:
-  encoder:
-    args_:
-      ckpt_idx: [240_000]
   qval_net:
     args_:
       fc_layers:
-        - [512]
-        # - [512, 512]
+        - [512, 512]
+        # - [512]
+
+  encoder:
+    cidx: [3200000]

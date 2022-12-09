@@ -7,13 +7,13 @@ env:
   args_:
     history_length: 1  # we treat it in the agent this time
     obs_mode: L
-    obs_dims: [96, 96]
+    obs_dims: [84, 84]
 
 device: cuda
 save: yes
 replay_save_freq: 2
 
-epoch_cnt: 50
+epoch_cnt: 75  # WATCH OUT!!
 train_step_cnt: 250_000
 valid_step_cnt: 125_000
 val_epsilon: 0.001  # validation epsilon greedy
@@ -24,7 +24,7 @@ agent:
     epsilon: [linear, 1.0, 0.01, 250000, 20_000]
     gamma: 0.99
     loss_fn: MSELoss
-    hist_len: 1
+    hist_len: 4
     update_freq: 4
     target_update_freq: 8000
 
@@ -35,17 +35,17 @@ replay_:
 
 estimator:
   encoder:
-    name: _  # ??
+    name: IDEncoder  # look under ul/nets/
     freeze: yes
-    root: results/2022Nov28-141753_BYOL_w16/0001_dynamics_net.args_.K_4/0
-    cidx: 3200000
     args_:
-      stack_sz: 1
-      grp_norm: 0
+      dummy: null
   qval_net:
-    name: MLPQ
+    name: CNN
     args_:
-      fc_layers: [512, 512]
+      inp_ch: 1
+      cast: yes  # required when using IDEncoder
+      cn_layers: [[32, 8, 4], [64, 4, 2], [64, 3, 1]]
+      fc_layers: [512]
       initializer: "xavier_uniform"  # this field can be missing
 
 optim:
