@@ -95,7 +95,11 @@ class CoolAgent:
     def init_from_opts(cls, opt):
 
         encoder = SamplingWorldModel(ImpalaEncoder(1, **opt.estimator.encoder.args))
-        encoder = encoder.load_checkpoint_(opt.estimator.encoder.path)
+        encoder = encoder.load_checkpoint_(
+            "{}/model_{:08d}.pkl".format(
+                opt.estimator.encoder.root, opt.estimator.encoder.cidx
+            )
+        )
 
         z_size = encoder.M
         # get the value function
