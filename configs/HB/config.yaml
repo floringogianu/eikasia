@@ -1,0 +1,4 @@
+model:
+  dynamics_net:
+    args_:
+      K: [4,8]
