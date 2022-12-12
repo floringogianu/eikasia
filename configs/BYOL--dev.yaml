@@ -4,35 +4,40 @@ epochs: 10
 device: cuda
 
 
-alpha: 0.99
-
 # divided by seq_steps gives the save freq
 base_save_freq: 1_200_000
 
-encoder:
-  name: ImpalaEncoder
-  args_:
-    inp_ch: 1
-    grp_norm: 0
-    stack_sz: 1
+model:
+  name: BYOL
 
-dynamics_net:
-  name: WorldModel
   args_:
-    K: 2
-    M: 256
-    N: 512
-    pfx_steps: 20
-    seq_steps: 60
-    act_no: 18
-    act_emb_sz: 32
-    act_emb_train: no
+    alpha: 0.99
 
-optim:
-  name: Adam
-  args_:
-    lr: 0.0001
-    # betas: [0.5, 0.9]
+  encoder:
+    name: ImpalaEncoder
+    args_:
+      inp_ch: 1
+      grp_norm: 0
+      stack_sz: 1
+
+  dynamics_net:
+    name: WorldModel
+    args_:
+      K: 2
+      M: 256
+      N: 512
+      pfx_steps: 20
+      seq_steps: 60
+      act_no: 18
+      act_emb_sz: 32
+      act_emb_train: no
+      hw_mlp: [512, 512]
+
+  optim:
+    name: Adam
+    args_:
+      lr: 0.0001
+      # betas: [0.5, 0.9]
 
 
 dset:
