@@ -144,7 +144,7 @@ class HindsightBYOL(nn.Module):
 
         # critic: g(b_(t,i-1), a_t+i-1, Z_(t,i))
         inp = M + act_emb_sz + opt.args["hin_dim"]
-        critic = mlp(inp, 1, opt.args["hw_critic"], final_activation=nn.Sigmoid)
+        critic = mlp(inp, 1, opt.args["hw_critic"], link_fn=nn.Sigmoid)
 
         # register parameters in the optimizer
         optim = getattr(torch.optim, opt.optim.name)(
