@@ -9,21 +9,27 @@ from torch.nn.utils import parameters_to_vector as param2vec
 from .autoencoder import AutoEncoderKL
 
 
-def get_mlp(dims, activation_fn="ReLU"):
-    """A generic MLP."""
+def mlp(inp: int, out: int, hid: list, act_fn="ReLU", link_fn=None) -> nn.Module:
     layers = []
-    for i in range(len(dims) - 1):
-        in_dim, out_dim = dims[i : i + 2]
-        layers.append(nn.Linear(in_dim, out_dim, bias=True))
-        if i != (len(dims) - 2):
-            layers.append(getattr(nn, activation_fn)())
-    return nn.Sequential(nn.Flatten(), *layers)
+    act_fn = getattr(nn, act_fn)
+    for i, h in enumerate(hid):
+        if i == 0:
+            layers.append(nn.Linear(inp, hid[0])),
+        layers.append(act_fn())
+        layers.append(nn.Linear(h, h))
+        if i == (len(hid) - 1):
+            layers.append(act_fn())
+            layers.append(nn.Linear(hid[-1], out)),
+    if link_fn is not None:
+        layers.append(link_fn())
+    return nn.Sequential(*layers)
 
 
 class RewardModel(nn.Module):
     def __init__(self, layers, optimizer) -> None:
         super().__init__()
-        self.estimator = get_mlp(layers)
+        inp, out = layers.pop(0), layers.pop()
+        self.estimator = mlp(inp, out, layers)
         self.optimizer = optimizer(self.estimator.parameters())
 
     def forward(self, x):

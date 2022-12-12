@@ -1,22 +1,16 @@
 """ Entry point. """
-from collections import deque
 from copy import deepcopy
-from functools import partial
-from itertools import product
-import random
 
-import cv2
-import numpy as np
 import rlog
 import torch
 import torch.nn as nn
 import torch.utils.benchmark as bench
-import torchvision.transforms as T
-import webdataset as wds
 from liftoff import parse_opts
 
 import common.io_utils as ioutil
 from rl.encoders import ImpalaEncoder
+from ul.data_loading import get_seq_loader
+from ul.models import mlp
 
 
 class WorldModel(nn.Module):
@@ -39,7 +33,8 @@ class WorldModel(nn.Module):
         self.encoder = encoder
         self.cls_loop = nn.GRU(N, M)
         self.opn_loop = nn.GRU(act_emb_sz, M)
-        self.g = nn.Sequential(nn.Linear(M, M), nn.ReLU(), nn.Linear(M, N))
+        self.g = mlp(M, N, [512, 512])
+        # self.g = nn.Sequential(nn.Linear(M, M), nn.ReLU(), nn.Linear(M, N))
         self.act_emb = nn.Embedding(act_no, act_emb_sz)
         self.act_emb.weight.requires_grad = act_emb_train
 
@@ -91,7 +86,7 @@ class WorldModel(nn.Module):
 
 
 class BYOL(nn.Module):
-    def __init__(self, alpha, dynamics_net, optim) -> None:
+    def __init__(self, dynamics_net, optim, alpha=None) -> None:
         """Bootstrap Your Own Latent Model.
 
         Args:
@@ -110,7 +105,7 @@ class BYOL(nn.Module):
         encoder = ImpalaEncoder(**opt.encoder.args)
         dynet = m = WorldModel(encoder, **opt.dynamics_net.args)
         optim = getattr(torch.optim, opt.optim.name)(m.parameters(), **opt.optim.args)
-        return cls(opt.alpha, dynet, optim)
+        return cls(dynet, optim, **opt.args)
 
     def train(self, obs_seq, act_seq):
         # cache some shapes
@@ -121,7 +116,8 @@ class BYOL(nn.Module):
 
         # get the targets
         with torch.no_grad():
-            # ignore the warmup prefix and the first observation
+            # ignore the warmup prefix. Targets are Wt+1,
+            # that's why we also ignore the first observation.
             tgt_seq = obs_seq[P + 1 :]
             T, B, C, W, H = tgt_seq.shape
             # reshape for efficient encoding
@@ -151,86 +147,10 @@ class BYOL(nn.Module):
         return loss.detach().cpu().item()
 
 
-def is_valid(seq, seq_steps):
-    """Checks the sequence is not crossing shard boundaries.
-    We do this by checking the idxs are consistent.
-    """
-    diff = int(seq[-1].split(":")[-1]) - int(seq[0].split(":")[-1])
-    return diff == (seq_steps - 1)
-
-
-def sliding_window(data, seq_steps, subsample):
-    """Used by webdataset to compose sliding windows of samples.
-    A sample is usually a tuple (image, dict, __key__). The key can be used to ID the sample.
-
-    Args:
-        data (generator): sequence of samples from webdataset.
-        seq_steps (int): length of the sequence used for training.
-
-    Yields:
-        tuple: Sequences of frames, actions, rewards, etc...
-    """
-    # concate in a deque, then yield if conditions apply
-    list_of_tuples = deque(maxlen=seq_steps)
-    for i, d in enumerate(data):
-        list_of_tuples.append(d)
-        if len(list_of_tuples) == seq_steps:  # deque reached required size
-
-            # we want to avoid overfitting so we only sample every other
-            # subsample / seq_steps
-            if subsample and (random.random() > (subsample / seq_steps)):
-                continue
-
-            tuple_of_lists = tuple(zip(*list_of_tuples))
-            keys = tuple_of_lists[2]
-            if is_valid(keys, seq_steps):  # and the sequence is valid
-                # arrange the data in tensors the size of sequence lenght
-                state_seq = (
-                    torch.from_numpy(np.stack(tuple_of_lists[0], axis=0))
-                    .unsqueeze_(1)
-                    .contiguous()
-                )
-                # actions, rewards and done are in a dictionary at this point
-                action_seq, reward_seq, done_seq = list(
-                    zip(*[el.values() for el in tuple_of_lists[1]])
-                )
-                action_seq = torch.tensor(action_seq, dtype=torch.int64)
-                # reward_seq = torch.tensor(reward_seq, dtype=torch.float32)
-                yield (state_seq, action_seq)
-
-
-def get_dloader(opt):
-    prep = T.Lambda(
-        lambda x: cv2.resize(
-            cv2.cvtColor(x, cv2.COLOR_RGB2GRAY), (96, 96), interpolation=cv2.INTER_AREA
-        )
-    )
-
-    # we use a sliding window to get sequences of total length given by
-    # the the training length + the warm-up lenght required by the RNN
-    seq_length = sum([opt.dynamics_net.args[k] for k in ("seq_steps", "pfx_steps")])
-    sequencer = partial(
-        sliding_window, seq_steps=seq_length, subsample=opt.dset.subsample
-    )
-
-    dset = (
-        wds.WebDataset(opt.dset.path, shardshuffle=True)
-        .decode("rgb8")
-        .to_tuple("state.png", "ard.msg", "__key__")
-        .map_tuple(prep, None, None)
-        .compose(sequencer)
-        .shuffle(opt.dset.shuffle)
-        .batched(opt.dset.batch_size)
-    )
-    ldr = wds.WebLoader(dset, **opt.loader.args)
-    ldr = ldr.unbatched().shuffle(opt.loader.shuffle).batched(opt.loader.batch_size)
-    return ldr, dset
-
-
 def runtime_opt_(opt):
     """Use this method to add any runtime opt fields are necessary."""
     opt.device = torch.device(opt.device)
-    opt.save_freq = int(opt.base_save_freq / opt.dynamics_net.args["seq_steps"])
+    opt.save_freq = int(opt.base_save_freq / opt.model.dynamics_net.args["seq_steps"])
     return opt
 
 
@@ -251,8 +171,8 @@ def run(opt):
     )
 
     # get data and model
-    ldr, dset = get_dloader(opt)
-    model = BYOL.from_opt(opt).to(opt.device)
+    ldr, dset = get_seq_loader(opt)
+    model = BYOL.from_opt(opt.model).to(opt.device)
 
     # some logging
     rlog.info(ioutil.config_to_string(opt))
@@ -293,47 +213,8 @@ def run(opt):
         rlog.info(f"Done epoch {epoch}.")
 
 
-def train_mockup(model, data):
-    model.train(*data)
-
-
-def check_perf():
-    device = torch.device("cuda")
-
-    results = []
-    for (B, T, L) in product((16, 32), (60, 80), (0, 20, 40)):
-        data = (
-            torch.randn((T + L, B, 3, 96, 96), device=device),
-            torch.randint(18, (T + L, B), device=device),
-        )
-
-        models = {
-            "BYOL(K=2)": partial(BYOL, pfx_steps=L, K=2),
-            "BYOL(K=4)": partial(BYOL, pfx_steps=L, K=4),
-            "BYOL(K=8)": partial(BYOL, pfx_steps=L, K=8),
-        }
-
-        for model_name, model_fn in models.items():
-            model = model_fn().to(device)
-
-            results.append(
-                bench.Timer(
-                    stmt="train_mockup(model, data)",
-                    setup="from __main__ import train_mockup",
-                    globals={"model": model, "data": data},
-                    label="TRAIN one sequence",
-                    sub_label=f"B={B:3d},T={T:3d},L={L:3d}",
-                    description=model_name,
-                ).blocked_autorange(min_run_time=2)
-            )
-    compare = bench.Compare(results)
-    compare.colorize()
-    compare.print()
-
-
 def main():
     """Liftoff"""
-    # check_perf()
     run(parse_opts())
 
 

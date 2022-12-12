@@ -1,13 +1,99 @@
+import random
+from collections import deque
 from functools import partial
 
 import cv2
+import numpy as np
+import torch
 import torchvision.transforms as T
-import webdataset as wds  #pylint: disable=import-error
+import webdataset as wds  # pylint: disable=import-error
 from torch.utils.data import ConcatDataset, DataLoader
 from torchvision.datasets import CelebA
 
 
-# configure loaders
+# configure sequence loaders
+
+
+def is_valid(seq, seq_steps):
+    """Checks the sequence is not crossing shard boundaries.
+    We do this by checking the idxs are consistent.
+    """
+    diff = int(seq[-1].split(":")[-1]) - int(seq[0].split(":")[-1])
+    return diff == (seq_steps - 1)
+
+
+def sliding_window(data, seq_steps, subsample):
+    """Used by webdataset to compose sliding windows of samples.  A sample is
+    usually a tuple (image, dict, __key__). The key can be used to ID the
+    sample.
+
+    Args:
+        data (generator): sequence of samples from webdataset.
+        seq_steps (int): length of the sequence used for training.
+
+    Yields:
+        tuple: Sequences of frames, actions, rewards, etc...
+    """
+    # concate in a deque, then yield if conditions apply
+    list_of_tuples = deque(maxlen=seq_steps)
+    for i, d in enumerate(data):
+        list_of_tuples.append(d)
+        if len(list_of_tuples) == seq_steps:  # deque reached required size
+
+            # we want to avoid overfitting so we only sample every other
+            # subsample / seq_steps
+            if subsample and (random.random() > (subsample / seq_steps)):
+                continue
+
+            tuple_of_lists = tuple(zip(*list_of_tuples))
+            keys = tuple_of_lists[2]
+            if is_valid(keys, seq_steps):  # and the sequence is valid
+                # arrange the data in tensors the size of sequence lenght
+                state_seq = (
+                    torch.from_numpy(np.stack(tuple_of_lists[0], axis=0))
+                    .unsqueeze_(1)
+                    .contiguous()
+                )
+                # actions, rewards and done are in a dictionary at this point
+                action_seq, reward_seq, done_seq = list(
+                    zip(*[el.values() for el in tuple_of_lists[1]])
+                )
+                action_seq = torch.tensor(action_seq, dtype=torch.int64)
+                # reward_seq = torch.tensor(reward_seq, dtype=torch.float32)
+                yield (state_seq, action_seq)
+
+
+def get_seq_loader(opt):
+    prep = T.Lambda(
+        lambda x: cv2.resize(
+            cv2.cvtColor(x, cv2.COLOR_RGB2GRAY), (96, 96), interpolation=cv2.INTER_AREA
+        )
+    )
+
+    # we use a sliding window to get sequences of total length given by
+    # the the training length + the warm-up lenght required by the RNN
+    dyn_args = opt.model.dynamics_net.args
+    sequencer = partial(
+        sliding_window,
+        seq_steps=dyn_args["seq_steps"] + dyn_args["pfx_steps"],
+        subsample=opt.dset.subsample,
+    )
+
+    dset = (
+        wds.WebDataset(opt.dset.path, shardshuffle=True)
+        .decode("rgb8")
+        .to_tuple("state.png", "ard.msg", "__key__")
+        .map_tuple(prep, None, None)
+        .compose(sequencer)
+        .shuffle(opt.dset.shuffle)
+        .batched(opt.dset.batch_size)
+    )
+    ldr = wds.WebLoader(dset, **opt.loader.args)
+    ldr = ldr.unbatched().shuffle(opt.loader.shuffle).batched(opt.loader.batch_size)
+    return ldr, dset
+
+
+# configure one sample loaders
 
 
 def get_loader(dset, **kwargs):
