@@ -24,6 +24,7 @@ class WorldModel(nn.Module):
         act_no=18,
         act_emb_sz=32,
         act_emb_train=False,
+        hw_mlp=None,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -33,8 +34,7 @@ class WorldModel(nn.Module):
         self.encoder = encoder
         self.cls_loop = nn.GRU(N, M)
         self.opn_loop = nn.GRU(act_emb_sz, M)
-        self.g = mlp(M, N, [512, 512])
-        # self.g = nn.Sequential(nn.Linear(M, M), nn.ReLU(), nn.Linear(M, N))
+        self.g = mlp(M, N, hw_mlp)
         self.act_emb = nn.Embedding(act_no, act_emb_sz)
         self.act_emb.weight.requires_grad = act_emb_train
 
