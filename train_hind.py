@@ -63,7 +63,7 @@ class WorldModel(nn.Module):
         # we will vectorize the open loop prediction
         # since it only depends on b_t and a_{t+k}
         bts = bts[: -self.K]  # that means we don't need the last K states
-        T, B, M = bts.shape  # WARN: T,B change here
+        T, B, M = bts.shape
         bts = bts.view(1, T * B, M)  # reshape in order to vectorize the time
         # we don't need the last action
         act_seq = act_seq[:-1, :]
@@ -80,11 +80,13 @@ class WorldModel(nn.Module):
         # we unroll K times into the future, **starting from each timestep**
         out, _ = self.opn_loop(act_embs, bts)
 
-        # out will be T,K,B,M
-        return (
-            out.view(self.K, T, B, M).permute(1, 0, 2, 3).contiguous(),
-            act_embs.view(self.K, T, B, -1).permute(1, 0, 2, 3).contiguous(),
-        )
+        # out will be T,K+1,B,M for bts and T, K, B, M for actions
+        out = out.view(self.K, T, B, M).permute(1, 0, 2, 3).contiguous()
+        bts = bts.view(T, B, M).unsqueeze(1)
+        out = torch.cat((bts, out), dim=1)
+
+        act_embs = act_embs.view(self.K, T, B, -1).permute(1, 0, 2, 3).contiguous()
+        return out, act_embs
 
 
 class HindsightBYOL(nn.Module):
@@ -174,25 +176,30 @@ class HindsightBYOL(nn.Module):
             ys = self.target_encoder(ys)
             ys = ys.view(T, B, -1)
 
-        # unroll the world model: T,K,B,M
+        # unroll the world model: btk = T,K+1,B,M, actk = T,K,B,emb_size
         btk, actk = self.dyn_net(obs_seq, act_seq)
-        T, K, B, M = btk.shape
+        T, _, B, _ = btk.shape
+
+        # here's the weirdness, for the generator we need b_t, b_t,1, b_t,2, ...
+        _btk = btk[:, :K, :, :]
+        # for the reconstruction and critic we need the open-loop activations instead
+        btk_ = btk[:, 1:, :, :]
 
         # sample hindsight vectors Z
-        eps = torch.randn(T + K - 1, B, self.eps_dim, device=btk.device)
+        # eps = torch.randn(T + K - 1, B, self.eps_dim, device=btk.device)
+        epsk = torch.randn(T, K, B, self.eps_dim, device=btk.device)
 
         # unfold noise and targets (Wt+i in the paper)
-        epsk = eps.unfold(0, K, 1).permute(0, 3, 1, 2).contiguous()
-        epsk.view(T * K * B, self.eps_dim)
+        # epsk = eps.unfold(0, K, 1).permute(0, 3, 1, 2).contiguous()
         ysk = ys.unfold(0, K, 1).permute(0, 3, 1, 2)
 
         # sample hindsight vector
         # input is reshaped to T * K * B
-        gen_net_inp = torch.cat([epsk, btk, actk, ysk], dim=-1).view(T * K * B, -1)
+        gen_net_inp = torch.cat([epsk, _btk, actk, ysk], dim=-1).view(T * K * B, -1)
         ztk = self.gen_net(gen_net_inp).view(T, K, B, -1)
 
         # compute reconstructions (Wt+i hat in the paper)
-        rec_net_inp = torch.cat([btk, actk, ztk], dim=-1).view(T * K * B, -1)
+        rec_net_inp = torch.cat([btk_, actk, ztk], dim=-1).view(T * K * B, -1)
         wtk = self.rec_net(rec_net_inp).view(T, K, B, -1)
 
         # d = zip(["btk", "epsk", "actk", "ysk", "ztk"], [btk, epsk, actk, ysk, ztk])
@@ -203,22 +210,29 @@ class HindsightBYOL(nn.Module):
         rec_loss = nn.functional.mse_loss(wtk, ysk)
 
         # compute positive samples
-        pos_inp = torch.cat([btk, actk, ztk], dim=-1).view(T * K * B, -1)
+        pos_inp = torch.cat([btk_, actk, ztk], dim=-1).view(T * K * B, -1)
         pos = torch.exp(self.critic(pos_inp)).view(T, K, B, -1)
 
         neg = []
         for i in range(B):
-            btk_ = btk[:, :, i, :].unsqueeze(-2).expand(T, K, B - 1, btk.shape[-1])
-            actk_ = actk[:, :, i, :].unsqueeze(-2).expand(T, K, B - 1, actk.shape[-1])
+            bfix = btk_[:, :, i, :].unsqueeze(-2).expand(T, K, B - 1, btk_.shape[-1])
+            afix = actk[:, :, i, :].unsqueeze(-2).expand(T, K, B - 1, actk.shape[-1])
             idxs = torch.tensor([x for x in range(B) if x != i])
             ztk_ = ztk[:, :, idxs, :]
-            neg_inp = torch.cat([btk_, actk_, ztk_], dim=-1).view(T * K * (B - 1), -1)
+            neg_inp = torch.cat([bfix, afix, ztk_], dim=-1).view(T * K * (B - 1), -1)
             neg_ = torch.exp(self.critic(neg_inp).view(T, K, (B - 1), -1))
             neg.append(neg_.sum(dim=2, keepdim=True))
         neg = torch.cat(neg, dim=2)
 
         # objective 2. Invariance
         inv_loss = torch.log(pos / (pos + neg).div(B)).mean()
+
+        print("pos:{:8.3f}   neg:{:8.3f}".format(pos.data.mean().item(), neg.data.div(B-1).mean().item()))
+        print("pos:{:8.3f}   neg:{:8.3f}".format(pos.data.max().item(), neg.data.div(B-1).max().item()))
+        print("den:{:8.3f}".format((pos.data + neg.data).div(B).mean().item()))
+        print("inv:{:8.5f}".format(inv_loss.data.item()))
+        print("rec:{:8.5f}".format(rec_loss.data.item()))
+        print("---")
 
         # total loss
         loss = rec_loss + inv_loss
@@ -259,6 +273,8 @@ def run(opt):
         rlog.AvgMetric("trn_loss", metargs=["trn_loss", 1]),
         rlog.AvgMetric("trn_rec_loss", metargs=["trn_rec_loss", 1]),
         rlog.AvgMetric("trn_inv_loss", metargs=["trn_inv_loss", 1]),
+        rlog.AvgMetric("trn_ppos", metargs=["trn_ppos", 1]),
+        rlog.AvgMetric("trn_pneg", metargs=["trn_pneg", 1]),
         rlog.FPSMetric("trn_sps", metargs=["trn_seq"]),
     )
 
@@ -313,7 +329,6 @@ def run(opt):
 def main():
     """Liftoff"""
     from liftoff import parse_opts
-
     run(parse_opts())
 
     # import sys
