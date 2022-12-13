@@ -140,8 +140,8 @@ class HindsightBYOL(nn.Module):
         inp = M + act_emb_sz + N + opt.args["eps_dim"]
         gen_net = mlp(inp, opt.args["hin_dim"], opt.args["hw_gen"])
 
-        # reconstructor: f(b_(t,i-1), a_t+i-1, Z_(t,i))
-        inp = M + act_emb_sz + opt.args["hin_dim"]
+        # reconstructor: f(b_(t,i-1), Z_(t,i)). Maybe a_t+i-1,  too?
+        inp = M + opt.args["hin_dim"]  # TODO: + act_emb_sz 
         rec_net = mlp(inp, N, opt.args["hw_rec"])
 
         # critic: g(b_(t,i-1), a_t+i-1, Z_(t,i))
@@ -199,7 +199,8 @@ class HindsightBYOL(nn.Module):
         ztk = self.gen_net(gen_net_inp).view(T, K, B, -1)
 
         # compute reconstructions (Wt+i hat in the paper)
-        rec_net_inp = torch.cat([btk_, actk, ztk], dim=-1).view(T * K * B, -1)
+        # maybe ackt too? 
+        rec_net_inp = torch.cat([btk_, ztk], dim=-1).view(T * K * B, -1)
         wtk = self.rec_net(rec_net_inp).view(T, K, B, -1)
 
         # d = zip(["btk", "epsk", "actk", "ysk", "ztk"], [btk, epsk, actk, ysk, ztk])
