@@ -228,12 +228,12 @@ class HindsightBYOL(nn.Module):
         # objective 2. Invariance
         inv_loss = torch.log(pos / (pos + neg).div(B)).mean()
 
-        print("pos:{:8.3f}   neg:{:8.3f}".format(pos.data.mean().item(), neg.data.div(B-1).mean().item()))
-        print("pos:{:8.3f}   neg:{:8.3f}".format(pos.data.max().item(), neg.data.div(B-1).max().item()))
-        print("den:{:8.3f}".format((pos.data + neg.data).div(B).mean().item()))
-        print("inv:{:8.5f}".format(inv_loss.data.item()))
-        print("rec:{:8.5f}".format(rec_loss.data.item()))
-        print("---")
+        # print("pos:{:8.3f}   neg:{:8.3f}".format(pos.data.mean().item(), neg.data.div(B-1).mean().item()))
+        # print("pos:{:8.3f}   neg:{:8.3f}".format(pos.data.max().item(), neg.data.div(B-1).max().item()))
+        # print("den:{:8.3f}".format((pos.data + neg.data).div(B).mean().item()))
+        # print("inv:{:8.5f}".format(inv_loss.data.item()))
+        # print("rec:{:8.5f}".format(rec_loss.data.item()))
+        # print("---")
 
         # total loss
         loss = rec_loss + inv_loss
