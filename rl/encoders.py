@@ -42,7 +42,7 @@ class ResNetStack(nn.Module):
             self.blocks.append(ResNetBlock(out_ch, out_ch, not grp_norm, act_fn))
 
         if grp_norm:
-            self.blocks.append(nn.GroupNorm(num_groups=grp_norm, num_channels=grp_norm))
+            self.blocks.append(nn.GroupNorm(num_groups=grp_norm, num_channels=out_ch))
 
     def forward(self, x):
         x = self.mxp(self.cnv(x))
