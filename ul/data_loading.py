@@ -22,6 +22,20 @@ def is_valid(seq, seq_steps):
     return diff == (seq_steps - 1)
 
 
+def _preprocess(tuple_of_lists):
+    # arrange the data in tensors the size of sequence lenght
+    state_seq = (
+        torch.from_numpy(np.stack(tuple_of_lists[0], axis=0)).unsqueeze_(1).contiguous()
+    )
+    # actions, rewards and done are in a dictionary at this point
+    action_seq, reward_seq, done_seq = list(
+        zip(*[el.values() for el in tuple_of_lists[1]])
+    )
+    # reward_seq = torch.tensor(reward_seq, dtype=torch.float32)
+    action_seq = torch.tensor(action_seq, dtype=torch.int64)
+    return state_seq, action_seq
+
+
 def sliding_window(data, seq_steps, subsample):
     """Used by webdataset to compose sliding windows of samples.  A sample is
     usually a tuple (image, dict, __key__). The key can be used to ID the
@@ -34,33 +48,52 @@ def sliding_window(data, seq_steps, subsample):
     Yields:
         tuple: Sequences of frames, actions, rewards, etc...
     """
-    # concate in a deque, then yield if conditions apply
+    # add in a deque, then yield if conditions apply
     list_of_tuples = deque(maxlen=seq_steps)
+
+    was_done = False
     for i, d in enumerate(data):
         list_of_tuples.append(d)
-        if len(list_of_tuples) == seq_steps:  # deque reached required size
 
-            # we want to avoid overfitting so we only sample every other
-            # subsample / seq_steps
-            if subsample and (random.random() > (subsample / seq_steps)):
-                continue
+        # check if ready
+        deq_is_ready = len(list_of_tuples) == seq_steps
+        if not deq_is_ready:
+            continue
 
-            tuple_of_lists = tuple(zip(*list_of_tuples))
-            keys = tuple_of_lists[2]
-            if is_valid(keys, seq_steps):  # and the sequence is valid
-                # arrange the data in tensors the size of sequence lenght
-                state_seq = (
-                    torch.from_numpy(np.stack(tuple_of_lists[0], axis=0))
-                    .unsqueeze_(1)
-                    .contiguous()
-                )
-                # actions, rewards and done are in a dictionary at this point
-                action_seq, reward_seq, done_seq = list(
-                    zip(*[el.values() for el in tuple_of_lists[1]])
-                )
-                action_seq = torch.tensor(action_seq, dtype=torch.int64)
-                # reward_seq = torch.tensor(reward_seq, dtype=torch.float32)
-                yield (state_seq, action_seq)
+        # check if valid
+        tuple_of_lists = tuple(zip(*list_of_tuples))
+        keys = tuple_of_lists[2]
+        if not is_valid(keys, seq_steps):  # and the sequence is valid
+            continue
+
+        # immediately return the sequence containing the terminal transition.
+        if d[1]["done"]:
+            state_seq, action_seq = _preprocess(tuple_of_lists)
+            # and flush the deque so that we never sample sequences
+            # containing "done" elsewhere than at the end of the sequence
+            list_of_tuples.clear()
+            # also signal we just returned a "terminal sequence"
+            was_done = True
+            yield (state_seq, action_seq)
+
+        # if we just returned the "terminal sequence" wait for the deque to fill
+        # and return the first valid sequence of the episode -- "starting sequence"
+        # this mirrors the previous condition and unbiases the sampling.
+        elif was_done:
+            state_seq, action_seq = _preprocess(tuple_of_lists)
+            # also switch back the flag, return to normal operation
+            was_done = False
+            yield (state_seq, action_seq)
+
+        # we want to avoid overfitting so we only sample every other
+        # subsample / seq_steps
+        elif subsample and (random.random() > (subsample / seq_steps)):
+            continue
+
+        # normal operation
+        else:
+            state_seq, action_seq = _preprocess(tuple_of_lists)
+            yield (state_seq, action_seq)
 
 
 def get_seq_loader(opt):
