@@ -1,6 +1,7 @@
 """ Implementation of Curiosity in Hindsight on top of BYOL-Explore.
     Training is offlin only.
 """
+import gc
 import itertools
 from copy import deepcopy
 
@@ -102,6 +103,7 @@ class HindsightBYOL(nn.Module):
         alpha=None,
         eps_dim=None,
         hin_dim=None,
+        inv_coeff=1.0,
         **kwargs,
     ) -> None:
         """Bootstrap Your Own Latent Model with Hindsight.
@@ -123,6 +125,7 @@ class HindsightBYOL(nn.Module):
         self.alpha = alpha
         self.eps_dim = eps_dim
         self.hin_dim = hin_dim
+        self.inv_coeff = inv_coeff
         self.target_encoder = deepcopy(self.dyn_net.encoder)
 
     @classmethod
@@ -141,7 +144,7 @@ class HindsightBYOL(nn.Module):
         gen_net = mlp(inp, opt.args["hin_dim"], opt.args["hw_gen"])
 
         # reconstructor: f(b_(t,i-1), Z_(t,i)). Maybe a_t+i-1,  too?
-        inp = M + opt.args["hin_dim"]  # TODO: + act_emb_sz 
+        inp = M + opt.args["hin_dim"]  # TODO: + act_emb_sz
         rec_net = mlp(inp, N, opt.args["hw_rec"])
 
         # critic: g(b_(t,i-1), a_t+i-1, Z_(t,i))
@@ -199,7 +202,7 @@ class HindsightBYOL(nn.Module):
         ztk = self.gen_net(gen_net_inp).view(T, K, B, -1)
 
         # compute reconstructions (Wt+i hat in the paper)
-        # maybe ackt too? 
+        # maybe ackt too?
         rec_net_inp = torch.cat([btk_, ztk], dim=-1).view(T * K * B, -1)
         wtk = self.rec_net(rec_net_inp).view(T, K, B, -1)
 
@@ -236,7 +239,7 @@ class HindsightBYOL(nn.Module):
         # print("---")
 
         # total loss
-        loss = rec_loss + inv_loss
+        loss = rec_loss + self.inv_coeff * inv_loss
 
         # optimize
         self.optim.zero_grad()
@@ -249,7 +252,7 @@ class HindsightBYOL(nn.Module):
         for wo, wt in zip(onl_params, tgt_params):
             wt.data = self.alpha * wt.data + (1 - self.alpha) * wo.data
 
-        return (x.detach().cpu().item() for x in [loss, rec_loss, inv_loss])
+        return (x.detach().item() for x in [loss, rec_loss, inv_loss])
 
 
 def runtime_opt_(opt):
@@ -325,6 +328,10 @@ def run(opt):
 
             step += 1
         rlog.info(f"Done epoch {epoch}.")
+
+        # ¯\_(ツ)_/¯
+        gc.collect()
+        torch.cuda.empty_cache()
 
 
 def main():
