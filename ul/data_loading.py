@@ -1,6 +1,7 @@
 import random
 from collections import deque
 from functools import partial
+from typing import NamedTuple
 
 import cv2
 import numpy as np
@@ -16,10 +17,9 @@ from torchvision.datasets import CelebA
 
 def is_valid(seq, seq_steps):
     """Checks the sequence is not crossing shard boundaries.
-    We do this by checking the idxs are consistent.
+    We do this by checking the key.step(s) are consistent.
     """
-    diff = int(seq[-1].split(":")[-1]) - int(seq[0].split(":")[-1])
-    return diff == (seq_steps - 1)
+    return (seq[-1].step - seq[0].step) == (seq_steps - 1)
 
 
 def _preprocess(tuple_of_lists):
@@ -33,7 +33,9 @@ def _preprocess(tuple_of_lists):
     )
     # reward_seq = torch.tensor(reward_seq, dtype=torch.float32)
     action_seq = torch.tensor(action_seq, dtype=torch.int64)
-    return state_seq, action_seq
+    # game index
+    gid = torch.tensor([k.game for k in tuple_of_lists[-1]], dtype=torch.int64).unique()
+    return state_seq, action_seq, gid
 
 
 def sliding_window(data, seq_steps, subsample):
@@ -52,8 +54,8 @@ def sliding_window(data, seq_steps, subsample):
     list_of_tuples = deque(maxlen=seq_steps)
 
     was_done = False
-    for i, d in enumerate(data):
-        list_of_tuples.append(d)
+    for i, sample in enumerate(data):
+        list_of_tuples.append(sample)
 
         # check if ready
         deq_is_ready = len(list_of_tuples) == seq_steps
@@ -67,23 +69,21 @@ def sliding_window(data, seq_steps, subsample):
             continue
 
         # immediately return the sequence containing the terminal transition.
-        if d[1]["done"]:
-            state_seq, action_seq = _preprocess(tuple_of_lists)
+        if sample[1]["done"]:
             # and flush the deque so that we never sample sequences
             # containing "done" elsewhere than at the end of the sequence
             list_of_tuples.clear()
             # also signal we just returned a "terminal sequence"
             was_done = True
-            yield (state_seq, action_seq)
+            yield _preprocess(tuple_of_lists)
 
         # if we just returned the "terminal sequence" wait for the deque to fill
         # and return the first valid sequence of the episode -- "starting sequence"
         # this mirrors the previous condition and unbiases the sampling.
         elif was_done:
-            state_seq, action_seq = _preprocess(tuple_of_lists)
             # also switch back the flag, return to normal operation
             was_done = False
-            yield (state_seq, action_seq)
+            yield _preprocess(tuple_of_lists)
 
         # we want to avoid overfitting so we only sample every other
         # subsample / seq_steps
@@ -92,17 +92,33 @@ def sliding_window(data, seq_steps, subsample):
 
         # normal operation
         else:
-            state_seq, action_seq = _preprocess(tuple_of_lists)
-            yield (state_seq, action_seq)
+            yield _preprocess(tuple_of_lists)
+
+
+def obs_prep(x):
+    """Grayscale and downsample."""
+    x = cv2.cvtColor(x, cv2.COLOR_RGB2GRAY)
+    return cv2.resize(x, (96, 96), interpolation=cv2.INTER_AREA)
+
+
+# key preprocessing
+SampleKey = NamedTuple("SampleKey", game=int, seed=int, ckpt=int, step=int)
+
+
+GAMES = ["Asterix", "Breakout", "Enduro", "MsPacman", "Seaquest", "SpaceInvaders"]
+I2G = dict(enumerate(GAMES))
+G2I = {g: i for i, g in I2G.items()}
+
+
+def key_prep(key):
+    """Convert keys of the form "Asterix_s:2_c:00250000_sid:024797"
+    to something frendlier and leaner.
+    """
+    parts = [x.split(":")[-1] for x in key.split("_")]
+    return SampleKey(G2I[parts[0]], *[int(x) for x in parts[1:]])
 
 
 def get_seq_loader(opt):
-    prep = T.Lambda(
-        lambda x: cv2.resize(
-            cv2.cvtColor(x, cv2.COLOR_RGB2GRAY), (96, 96), interpolation=cv2.INTER_AREA
-        )
-    )
-
     # we use a sliding window to get sequences of total length given by
     # the the training length + the warm-up lenght required by the RNN
     dyn_args = opt.model.dynamics_net.args
@@ -116,7 +132,7 @@ def get_seq_loader(opt):
         wds.WebDataset(opt.dset.path, shardshuffle=True)
         .decode("rgb8")
         .to_tuple("state.png", "ard.msg", "__key__")
-        .map_tuple(prep, None, None)
+        .map_tuple(obs_prep, None, key_prep)
         .compose(sequencer)
         .shuffle(opt.dset.shuffle)
         .batched(opt.dset.batch_size)
@@ -178,3 +194,32 @@ def get_atari(path, shuffle=1000):
         .to_tuple("state.png", "ard.msg", "__key__")
         .map_tuple(prep)
     )
+
+
+def _dev():
+    sequencer = partial(sliding_window, seq_steps=20, subsample=3)
+
+    dset = (
+        wds.WebDataset(
+            "./fold0/{asterix,breakout,enduro,mspacman,seaquest,spaceinvaders}_{0000..0165}.tar",
+            shardshuffle=True,
+        )
+        .decode("rgb8")
+        .to_tuple("state.png", "ard.msg", "__key__")
+        .map_tuple(obs_prep, None, key_prep)
+        .compose(sequencer)
+        .shuffle(8000)
+        .batched(2)
+    )
+    ldr = wds.WebLoader(dset, batch_size=None, num_workers=16)
+    ldr = ldr.unbatched().shuffle(1000).batched(32)
+
+    for i, (obs_seq, act_seq, gid_seq) in enumerate(ldr):
+        print(i, obs_seq.shape, act_seq.shape, gid_seq.shape)
+        print(gid_seq)
+        if i == 100:
+            break
+
+
+if __name__ == "__main__":
+    _dev()

@@ -17,6 +17,8 @@ model:
     eps_dim: 256
     hin_dim: 256
     alpha: 0.99
+    inv_coeff: 1.0
+    env_aware: yes
 
   shared_:
     M: 256
@@ -27,8 +29,8 @@ model:
     name: ImpalaEncoder
     args_:
       inp_ch: 1
-      grp_norm: 0
-      stack_sz: 1
+      grp_norm: 1
+      stack_sz: 2
 
   dynamics_net:
     name: WorldModel

@@ -104,6 +104,7 @@ class HindsightBYOL(nn.Module):
         eps_dim=None,
         hin_dim=None,
         inv_coeff=1.0,
+        env_aware=False,
         **kwargs,
     ) -> None:
         """Bootstrap Your Own Latent Model with Hindsight.
@@ -126,6 +127,7 @@ class HindsightBYOL(nn.Module):
         self.eps_dim = eps_dim
         self.hin_dim = hin_dim
         self.inv_coeff = inv_coeff
+        self.env_aware = env_aware
         self.target_encoder = deepcopy(self.dyn_net.encoder)
 
     @classmethod
@@ -162,7 +164,7 @@ class HindsightBYOL(nn.Module):
         # construct
         return cls(dyn_net, gen_net, rec_net, critic, optim, **opt.args)
 
-    def train(self, obs_seq, act_seq):
+    def train(self, obs_seq, act_seq, gid):
         """Training routine."""
 
         # cache some shapes
@@ -218,18 +220,54 @@ class HindsightBYOL(nn.Module):
         pos = torch.exp(self.critic(pos_inp)).view(T, K, B, -1)
 
         neg = []
-        for i in range(B):
-            bfix = btk_[:, :, i, :].unsqueeze(-2).expand(T, K, B - 1, btk_.shape[-1])
-            afix = actk[:, :, i, :].unsqueeze(-2).expand(T, K, B - 1, actk.shape[-1])
-            idxs = torch.tensor([x for x in range(B) if x != i])
-            ztk_ = ztk[:, :, idxs, :]
-            neg_inp = torch.cat([bfix, afix, ztk_], dim=-1).view(T * K * (B - 1), -1)
-            neg_ = torch.exp(self.critic(neg_inp).view(T, K, (B - 1), -1))
-            neg.append(neg_.sum(dim=2, keepdim=True))
+        if not self.env_aware:
+            B_ = B
+            for i in range(B):
+                # prep inputs
+                bfix = btk_[:, :, i, :]
+                afix = actk[:, :, i, :]
+                bfix = bfix.unsqueeze(-2).expand(T, K, B - 1, btk_.shape[-1])
+                afix = afix.unsqueeze(-2).expand(T, K, B - 1, actk.shape[-1])
+                # get the B-1 Z samples
+                idxs = torch.tensor([x for x in range(B) if x != i])
+                ztk_ = ztk[:, :, idxs, :]
+                neg_inp = torch.cat([bfix, afix, ztk_], dim=-1)
+                neg_inp = neg_inp.view(T * K * (B - 1), -1)
+                # compute negatives score
+                neg_ = torch.exp(self.critic(neg_inp).view(T, K, (B - 1), -1))
+                neg.append(neg_.sum(dim=2, keepdim=True))
+        else:
+            B_ = torch.ones(B, device=btk.device)
+            for i in range(B):
+                # get batch idxs associated with the game at position i
+                idxs = (gid == gid[i]).squeeze().nonzero().squeeze()
+                b = idxs.numel()
+                if b == 1:
+                    # ¯\_(ツ)_/¯
+                    # no negatives in the batch, it should happen rarely
+                    # so we pick at random some negatives, from other games
+                    b = 6  #  ~ B / len(GAMES) + 1 TODO: fix this
+                    idxs = torch.tensor([x for x in range(B) if x != i])
+                    idxs = idxs[torch.randperm(idxs.numel())[:b-1]]
+                # prep inputs (mirrors the above)
+                bfix = btk_[:, :, i, :]
+                afix = actk[:, :, i, :]
+                bfix = bfix.unsqueeze(-2).expand(T, K, b - 1, btk_.shape[-1])
+                afix = afix.unsqueeze(-2).expand(T, K, b - 1, actk.shape[-1])
+                # only take the other elements from the same game (mirrors the above)
+                idxs = idxs[idxs != i]
+                ztk_ = ztk[:, :, idxs, :]
+                neg_inp = torch.cat([bfix, afix, ztk_], dim=-1)
+                neg_inp = neg_inp.view(T * K * (b - 1), -1)
+                # compute negatives score
+                neg_ = torch.exp(self.critic(neg_inp).view(T, K, (b - 1), -1))
+                neg.append(neg_.sum(dim=2, keepdim=True))
+                B_[i] = b
+
         neg = torch.cat(neg, dim=2)
 
         # objective 2. Invariance
-        inv_loss = torch.log(pos / (pos + neg).div(B)).mean()
+        inv_loss = torch.log(pos / (pos + neg).div(B_)).mean()
 
         # print("pos:{:8.3f}   neg:{:8.3f}".format(pos.data.mean().item(), neg.data.div(B-1).mean().item()))
         # print("pos:{:8.3f}   neg:{:8.3f}".format(pos.data.max().item(), neg.data.div(B-1).max().item()))
@@ -300,15 +338,16 @@ def run(opt):
 
     step = 0
     for epoch in range(1, opt.epochs + 1):
-        for obs_seq, act_seq in ldr:
+        for (obs_seq, act_seq, gid) in ldr:
 
             # fix the input shapes a bit
             act_seq = act_seq.transpose(0, 1).contiguous().to(opt.device)
             obs_seq = obs_seq.transpose(0, 1).contiguous().to(opt.device)
             obs_seq = obs_seq.float().div(255.0)
+            gid = gid.to(opt.device)
 
             # one training step
-            loss, rec_loss, inv_loss = model.train(obs_seq, act_seq)
+            loss, rec_loss, inv_loss = model.train(obs_seq, act_seq, gid)
             rlog.put(
                 trn_loss=loss,
                 trn_rec_loss=rec_loss,
@@ -337,6 +376,7 @@ def run(opt):
 def main():
     """Liftoff"""
     from liftoff import parse_opts
+
     run(parse_opts())
 
     # import sys
