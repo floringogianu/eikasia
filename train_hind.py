@@ -248,7 +248,7 @@ class HindsightBYOL(nn.Module):
                     # so we pick at random some negatives, from other games
                     b = 6  #  ~ B / len(GAMES) + 1 TODO: fix this
                     idxs = torch.tensor([x for x in range(B) if x != i])
-                    idxs = idxs[torch.randperm(idxs.numel())[:b-1]]
+                    idxs = idxs[torch.randperm(idxs.numel())[: b - 1]]
                 # prep inputs (mirrors the above)
                 bfix = btk_[:, :, i, :]
                 afix = actk[:, :, i, :]
@@ -262,7 +262,8 @@ class HindsightBYOL(nn.Module):
                 # compute negatives score
                 neg_ = torch.exp(self.critic(neg_inp).view(T, K, (b - 1), -1))
                 neg.append(neg_.sum(dim=2, keepdim=True))
-                B_[i] = b
+                B_[i] = b - 1
+            B_ = B_.view(1, 1, B, 1).expand_as(pos)
 
         neg = torch.cat(neg, dim=2)
 
