@@ -196,7 +196,7 @@ def main(opt):
 
         # model
         if opt.model == "SamplingWorldModel":
-            enc = ImpalaEncoder(**cfg.encoder.args)
+            enc = ImpalaEncoder(**cfg.model.encoder.args)
             wm = SamplingWorldModel(enc).from_checkpoint(path)
             z_dim = 256
         elif opt.model == "SamplingEncoder":
