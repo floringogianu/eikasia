@@ -1,0 +1,10 @@
+model:
+  args_:
+    inv_coeff: [5.0]
+  dynamics_net:
+    args_:
+      K: [4, 8]
+  encoder:
+    args_:
+      grp_norm: [1]
+      stack_sz: [2]

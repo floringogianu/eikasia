@@ -1,0 +1,10 @@
+model:
+  args_:
+    env_aware: [yes]
+  dynamics_net:
+    args_:
+      K: [8, 4]
+  encoder:
+    args_:
+      grp_norm: [1]
+      stack_sz: [2]
