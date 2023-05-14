@@ -1,5 +1,4 @@
 from functools import partial
-from turtle import forward
 
 import numpy as np
 import torch
@@ -14,12 +13,12 @@ def mlp(inp: int, out: int, hid: list, act_fn="ReLU", link_fn=None) -> nn.Module
     act_fn = getattr(nn, act_fn)
     for i, h in enumerate(hid):
         if i == 0:
-            layers.append(nn.Linear(inp, hid[0])),
+            layers.append(nn.Linear(inp, hid[0]))
         layers.append(act_fn())
         layers.append(nn.Linear(h, h))
         if i == (len(hid) - 1):
             layers.append(act_fn())
-            layers.append(nn.Linear(hid[-1], out)),
+            layers.append(nn.Linear(hid[-1], out))
     if link_fn is not None:
         layers.append(link_fn())
     return nn.Sequential(*layers)
