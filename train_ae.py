@@ -7,7 +7,6 @@ from liftoff import parse_opts
 from torchvision.utils import save_image
 
 from ul.models import ObservationRewardModel
-from ul.autoencoder import AutoEncoderKL
 from ul.data_loading import get_dset, get_loader
 
 
