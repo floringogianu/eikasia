@@ -20,10 +20,10 @@ loader:
   batch_size: 32
 
 model:
-  name: TimeConsistencyAE
+  name: AutoEncoderKL
 
   observation_model:
-    name: AutoencoderKL
+    name: AutoEncoderKL
     z_dim: 4
     single_pass: yes
 
