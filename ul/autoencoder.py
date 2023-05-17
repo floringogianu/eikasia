@@ -2,12 +2,11 @@ from functools import partial
 from itertools import chain
 
 import torch
-import torch.nn as nn
+from torch import nn
 from torch.nn.utils import parameters_to_vector as param2vec
 
-import ul.nets as nets
+from ul import losses, nets
 from ul.priors import DiagonalGaussianDistribution
-import ul.losses as losses
 
 __all__ = ["AutoEncoderKL"]
 
