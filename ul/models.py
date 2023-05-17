@@ -8,6 +8,29 @@ from torch.nn.utils import parameters_to_vector as param2vec
 from .autoencoder import AutoEncoderKL
 
 
+__all__ = ["AutoEncoderKL", "TimeConsistencyAE"]
+
+
+def batch_randperm(x, dim=1):
+    """Takes a batch and permutes it with a different random permutation on the
+    specified dimension.
+    """
+    idxs = torch.argsort(torch.rand(x.shape[: dim + 1]), dim=-1)
+    for _ in range(x.ndim - dim - 1):
+        idxs.unsqueeze_(-1)
+    _idxs = idxs.repeat(*[1 for _ in range(dim + 1)], *(x.shape[dim + 1 :])).to(x.device)
+    return x.gather(dim, _idxs), idxs.squeeze()
+
+
+class TimeConsistencyAE(AutoEncoderKL):
+    def __init__(self, encoder, decoder, loss=None, optims=None, single_pass=True):
+        super().__init__(encoder, decoder, loss, optims, single_pass)
+
+    def train(self, x):
+        xperm, _ = batch_randperm(x)
+        super().train(xperm, x)
+
+
 def mlp(inp: int, out: int, hid: list, act_fn="ReLU", link_fn=None) -> nn.Module:
     layers = []
     act_fn = getattr(nn, act_fn)

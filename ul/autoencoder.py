@@ -56,7 +56,7 @@ class AutoEncoderKL(nn.Module):
         x_ = self.decoder(self.post_emb(z))
         return x_, pzx, (h, z)
 
-    def train(self, x):
+    def train(self, x, tgt=None):
         logs = []
 
         if self.single_pass:
@@ -69,7 +69,7 @@ class AutoEncoderKL(nn.Module):
 
             # get the loss
             loss, log = self.loss(
-                x,
+                tgt if tgt is not None else x,
                 x_,
                 pz_x,
                 optim_idx,  # either vae or discriminator loss

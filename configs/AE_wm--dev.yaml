@@ -20,7 +20,7 @@ loader:
   batch_size: 32
 
 model:
-  name: ObservationModel
+  name: TimeConsistencyAE
 
   observation_model:
     name: AutoencoderKL

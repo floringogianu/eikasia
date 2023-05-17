@@ -6,7 +6,7 @@ import torch
 from liftoff import parse_opts
 from torchvision.utils import save_image
 
-from ul.autoencoder import AutoEncoderKL
+import ul.models as models
 from ul.data_loading import get_seq_loader
 
 
@@ -37,8 +37,8 @@ def run(opt):
     opt.device = device = torch.device(opt.device)
 
     # get model
-    model = AutoEncoderKL.from_opt(opt.model.observation_model).to(device)
-    # model = ObservationRewardModel.from_opt(opt.model).to(device)
+    model = getattr(models, opt.model.name).from_opt(opt.model.observation_model)
+    model.to(device)
     print(model)
 
     # config dataloader
