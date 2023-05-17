@@ -1,0 +1,63 @@
+experiment: OM-WM
+
+epochs: 10
+device: cuda
+
+dset:
+  args_:
+    trn_path: ./data/6games_rnd_new/{asterix,breakout,enduro,mspacman,seaquest,spaceinvaders}_{0000..0164}.tar
+    val_path: ./data/6games_rnd_new/{asterix,breakout,enduro,mspacman,seaquest,spaceinvaders}_0165.tar
+    shuffle: 8000
+    batch_size: 2
+    subsample: 0
+    seq_steps: 4
+
+loader:
+  args_:
+    batch_size: null
+    num_workers: 12
+  shuffle: 1000
+  batch_size: 32
+
+model:
+  name: ObservationModel
+
+  observation_model:
+    name: AutoencoderKL
+    z_dim: 4
+    single_pass: yes
+
+    encoder:
+      name: WMEncoder  # look under ul/nets/
+      args_:
+        inp_ch: 4
+        group_norm: True
+    decoder:
+      name: WMDecoder  # look under ul/nets/
+      args_:
+        out_ch: 4
+        group_norm: True
+    loss:
+      name: LPIPSWithDiscriminator
+      args_:
+        disc_in_channels: 4
+        perceptual_weight: 0.0
+        disc_start: 50_000
+        disc_weight: 0.5
+        kl_weight: 1.0e-06
+    optim:
+      name: Adam
+      args_:
+        lr: 4.5e-06
+        betas: [0.5, 0.9]
+
+  # reward_model:
+  #   name: RewardModel
+  #   args_:
+  #     layers: []
+  #   optim:
+  #     name: Adam
+  #     args_:
+  #       lr: 4.5e-06
+  #       betas: [0.5, 0.9]
+

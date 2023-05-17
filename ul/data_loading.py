@@ -1,3 +1,4 @@
+""" Datasets and DataLoaders based on webdataset."""
 import random
 from collections import deque
 from functools import partial
@@ -28,14 +29,15 @@ def _preprocess(tuple_of_lists):
         torch.from_numpy(np.stack(tuple_of_lists[0], axis=0)).unsqueeze_(1).contiguous()
     )
     # actions, rewards and done are in a dictionary at this point
-    action_seq, reward_seq, done_seq = list(
-        zip(*[el.values() for el in tuple_of_lists[1]])
-    )
-    # reward_seq = torch.tensor(reward_seq, dtype=torch.float32)
+    action_seq, reward_seq, _ = list(zip(*[el.values() for el in tuple_of_lists[1]]))
     action_seq = torch.tensor(action_seq, dtype=torch.int64)
+    reward_seq = torch.tensor(reward_seq, dtype=torch.float32)
     # game index
-    gid = torch.tensor([k.game for k in tuple_of_lists[-1]], dtype=torch.int64).unique()
-    return state_seq, action_seq, gid
+    gid = torch.tensor(
+        [[k.game, k.seed, k.ckpt, k.step] for k in tuple_of_lists[-1]],
+        dtype=torch.int64,
+    )
+    return state_seq, action_seq, reward_seq, gid
 
 
 def sliding_window(data, seq_steps, subsample):
@@ -118,27 +120,45 @@ def key_prep(key):
     return SampleKey(G2I[parts[0]], *[int(x) for x in parts[1:]])
 
 
-def get_seq_loader(opt):
+def get_seq_loader(opt, split="trn"):
+    """Returns a DataLoader for sequences of transitions."""
     # we use a sliding window to get sequences of total length given by
     # the the training length + the warm-up lenght required by the RNN
-    dyn_args = opt.model.dynamics_net.args
+    try:
+        seq_steps = opt.dset.args["seq_steps"]
+    except AttributeError:
+        dyn_args = opt.model.dynamics_net.args
+        seq_steps = dyn_args["seq_steps"] + dyn_args["pfx_steps"]
+
     sequencer = partial(
         sliding_window,
-        seq_steps=dyn_args["seq_steps"] + dyn_args["pfx_steps"],
-        subsample=opt.dset.subsample,
+        seq_steps=seq_steps,
+        subsample=opt.dset.args["subsample"],
+    )
+
+    obs_prep = T.Compose(
+        [
+            T.Lambda(lambda x: cv2.cvtColor(x, cv2.COLOR_RGB2GRAY)),
+            T.Lambda(lambda x: cv2.resize(x, (96, 96), interpolation=cv2.INTER_AREA)),
+            T.ToTensor(),
+        ]
     )
 
     dset = (
-        wds.WebDataset(opt.dset.path, shardshuffle=True)
+        wds.WebDataset(opt.dset.args[f"{split}_path"], shardshuffle=True)
         .decode("rgb8")
         .to_tuple("state.png", "ard.msg", "__key__")
         .map_tuple(obs_prep, None, key_prep)
         .compose(sequencer)
-        .shuffle(opt.dset.shuffle)
-        .batched(opt.dset.batch_size)
+        .shuffle(opt.dset.args["shuffle"])
+        .batched(opt.dset.args["batch_size"])
     )
-    ldr = wds.WebLoader(dset, **opt.loader.args)
-    ldr = ldr.unbatched().shuffle(opt.loader.shuffle).batched(opt.loader.batch_size)
+    if split == "trn":
+        ldr = wds.WebLoader(dset, **opt.loader.args)
+        ldr = ldr.unbatched().shuffle(opt.loader.shuffle).batched(opt.loader.batch_size)
+    else:
+        ldr = wds.WebLoader(dset, batch_size=None, num_workers=6)
+        ldr = ldr.unbatched().shuffle(1000).batched(1)
     return ldr, dset
 
 
@@ -160,7 +180,6 @@ def get_loader(dset, **kwargs):
 
 
 def get_dset(name, split="trn", **kwargs):
-
     assert split in ("trn", "val"), f"Unknown split {split}. Accepted: `trn`,`val`"
     path = kwargs.get(f"{split}_path")
 
@@ -197,28 +216,44 @@ def get_atari(path, shuffle=1000):
 
 
 def _dev():
-    sequencer = partial(sliding_window, seq_steps=20, subsample=3)
+    sequencer = partial(sliding_window, seq_steps=4, subsample=0)
+    obs_prep = T.Compose(
+        [
+            T.Lambda(lambda x: cv2.cvtColor(x, cv2.COLOR_RGB2GRAY)),
+            T.Lambda(lambda x: cv2.resize(x, (96, 96), interpolation=cv2.INTER_AREA)),
+            T.ToTensor(),
+        ]
+    )
 
     dset = (
         wds.WebDataset(
-            "./fold0/{asterix,breakout,enduro,mspacman,seaquest,spaceinvaders}_{0000..0165}.tar",
+            "./data/6games_rnd_new/{asterix,breakout,enduro,mspacman,seaquest,spaceinvaders}_{0164..0165}.tar",
             shardshuffle=True,
+            # resampled=True,
         )
         .decode("rgb8")
         .to_tuple("state.png", "ard.msg", "__key__")
         .map_tuple(obs_prep, None, key_prep)
         .compose(sequencer)
         .shuffle(8000)
-        .batched(2)
     )
+
+    # for i, (obs, act, rew, gid) in enumerate(dset):
+    #     print(i, obs.shape, act.shape, rew.shape, gid.shape)
+    #     print(gid.squeeze())
+    #     if i == 100:
+    #         break
+
     ldr = wds.WebLoader(dset, batch_size=None, num_workers=16)
     ldr = ldr.unbatched().shuffle(1000).batched(32)
 
-    for i, (obs_seq, act_seq, gid_seq) in enumerate(ldr):
-        print(i, obs_seq.shape, act_seq.shape, gid_seq.shape)
-        print(gid_seq)
-        if i == 100:
-            break
+    # for i, (obs_seq, act_seq, rew_seq, gid_seq) in enumerate(ldr):
+    #     print(i, obs_seq.shape, act_seq.shape, rew_seq.shape, gid_seq.shape)
+    #     print(gid_seq.squeeze())
+    #     if i == 100:
+    #         break
+
+    return ldr, dset
 
 
 if __name__ == "__main__":
