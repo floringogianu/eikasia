@@ -9,7 +9,7 @@ from collections import deque
 import numpy as np
 import torch
 from ale_py import ALEInterface, LoggerMode, roms
-from gym.spaces import Box, Discrete
+from gymnasium.spaces import Discrete
 
 try:
     import cv2

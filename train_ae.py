@@ -37,7 +37,7 @@ def run(opt):
     opt.device = device = torch.device(opt.device)
 
     # get model
-    model = getattr(models, opt.model.name).from_opt(opt.model.observation_model)
+    model = getattr(models, opt.model.name).from_opt(opt.model)
     model.to(device)
     print(model)
 
@@ -53,6 +53,10 @@ def run(opt):
     # train
     for _ in range(opt.epochs):
         for step, (x, _, _, _) in enumerate(trn_ldr):
+
+            if x.shape[0] != opt.loader.batch_size:
+                continue
+
             x = x.squeeze().to(device)
             model.train(x)
 

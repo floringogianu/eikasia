@@ -20,7 +20,7 @@ loader:
   batch_size: 64
 
 model:
-  name: TimeConsistencyAE
+  name: PairWiseTimeConsistencyAE
 
   observation_model:
     name: AutoEncoderKL
@@ -51,13 +51,11 @@ model:
         lr: 4.5e-06
         betas: [0.5, 0.9]
 
-  # reward_model:
-  #   name: RewardModel
-  #   args_:
-  #     layers: []
-  #   optim:
-  #     name: Adam
-  #     args_:
-  #       lr: 4.5e-06
-  #       betas: [0.5, 0.9]
+  pairwise_tc_model:
+    name: PairwiseTCModel
+    optim:
+      name: Adam
+      args_:
+        lr: 4.5e-06
+        betas: [0.5, 0.9]
 

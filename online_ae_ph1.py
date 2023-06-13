@@ -1,4 +1,5 @@
 """ Entry point. """
+from collections import deque
 from pathlib import Path
 
 import numpy as np
@@ -15,6 +16,30 @@ from rl.replay import ExperienceReplay
 from rl.rl_routines import Episode, validate
 
 
+class ShortMemory:
+    def __init__(self, hist_len=1) -> None:
+        self.mem = deque([], maxlen=hist_len)
+        self.hist_len = hist_len
+        self.obs_spec = None
+
+    def push(self, x):
+        if self.obs_spec is None:
+            self.obs_spec = x.clone()
+            self.reset()
+        self.mem.append(x)
+
+    def retrieve(self):
+        return torch.stack(list(self.mem), 1)
+
+    def push_retrieve(self, x):
+        self.push(x)
+        return self.retrieve()
+
+    def reset(self):
+        for _ in range(self.hist_len):
+            self.mem.append(torch.zeros_like(self.obs_spec))
+
+
 class CoolValAgent:
     def __init__(self, encoder, qval_fn, opt) -> None:
         self.encoder = encoder
@@ -24,11 +49,16 @@ class CoolValAgent:
             opt.action_num,
             epsilon=opt.val_epsilon,
         )
+        self.short_mem = ShortMemory(opt.agent.args["hist_len"])
 
     def act(self, obs):
         z = self.encoder(obs).detach()
-        pi = self.policy_improvement.act(z)
+        zz = self.short_mem.push_retrieve(z)
+        pi = self.policy_improvement.act(zz)
         return pi
+
+    def reset(self):
+        self.short_mem.reset()
 
 
 def _get_latent_dims(f, inp_dim):
@@ -43,6 +73,7 @@ class CoolAgent:
         encoder,
         qval_fn,
         replay,
+        short_mem,
         policy_improvement,
         policy_evaluation,
         update_freq,
@@ -53,6 +84,7 @@ class CoolAgent:
         self.replay = replay
         self.policy_improvement = policy_improvement
         self.policy_evaluation = policy_evaluation
+        self.short_mem = short_mem
         self.update_freq = update_freq
         self.target_update_freq = target_update_freq
 
@@ -77,22 +109,25 @@ class CoolAgent:
 
     @classmethod
     def init_from_opts(cls, opt):
+
         opt = cls._set_ckpt_path(opt)
         encoder = estimators.Encoder(
             opt.estimator.encoder.name,
             opt.estimator.encoder.args,
             opt.estimator.encoder.freeze,
         )
-        # freeze the encoder
-        for p in encoder.parameters():
-            p.requires_grad = False
 
         # infer the expected input size of the qvalue network
         inp_ch = 3 if opt.env.args["obs_mode"] == "RGB" else 1
         print(encoder)
-        z_dims = _get_latent_dims(encoder, (1, 4, inp_ch, *opt.env.args["obs_dims"]))
-        z_size = np.prod(z_dims)
-        rlog.info("Infered z_dim={} |  z_size={}".format(z_dims, z_size))
+        z_dims = _get_latent_dims(encoder, (1, 1, inp_ch, *opt.env.args["obs_dims"]))
+        hist_len = opt.agent.args["hist_len"]
+        z_size = hist_len * np.prod(z_dims)
+        rlog.info(
+            "Infered z_dim={}, hist_len={}  |  z_size={}".format(
+                z_dims, hist_len, z_size
+            )
+        )
 
         # get the value function
         qval_fn = getattr(estimators, opt.estimator.qval_net.name)(
@@ -105,11 +140,13 @@ class CoolAgent:
         # replay
         if isinstance(opt.agent.args["epsilon"], list):
             opt.replay["warmup_steps"] = opt.agent.args["epsilon"][-1]
+            opt.replay["hist_len"] = hist_len
 
         return cls(
             encoder,
             qval_fn,
             ExperienceReplay(**opt.replay),
+            ShortMemory(hist_len),
             AGENTS[opt.agent.name]["policy_improvement"](
                 qval_fn, opt.action_num, **opt.agent.args
             ),
@@ -124,18 +161,16 @@ class CoolAgent:
 
     def act(self, obs):
         z = self.encoder(obs).detach()
-        pi = self.policy_improvement.act(z)
-
-        # add a dummy history dimension
-        z = z.unsqueeze(1)
+        zz = self.short_mem.push_retrieve(z)
+        pi = self.policy_improvement.act(zz)
 
         if len(self._transition) == 4:
             # self._transition contents: [prev_z, action, reward, done]
-            self.replay.push([*self._transition[:-1], z, self._transition[-1]])
+            self.replay.push([*self._transition[:-1], zz, self._transition[-1]])
 
         # reset self._transition
         del self._transition[:]
-        self._transition = [z, pi.action]
+        self._transition = [zz, pi.action]
 
         return pi
 
@@ -149,6 +184,9 @@ class CoolAgent:
         # append to the transition tuple
         self._transition += [reward, done]
 
+        if done:
+            self.short_mem.reset()
+
         # learn if a minimum no of transitions have been pushed in Replay
         if self.replay.is_ready:
             if self.total_steps % self.update_freq == 0:
@@ -156,7 +194,6 @@ class CoolAgent:
                 batch = self.replay.sample()
 
                 # compute the loss and optimize
-                print(batch[0].min(), batch[0].max())
                 loss = self.policy_evaluation(batch)
 
                 # stats
@@ -191,6 +228,7 @@ def train_one_epoch(
         # if _state is not None then the environment resumes from where
         # this function returned.
         for transition in Episode(env, agent, _state=last_state):
+
             agent.learn(transition)
             total_steps += 1
 
@@ -263,6 +301,7 @@ def run(opt):
 
     last_state = None  # used by train_one_epoch to know how to resume episode.
     for epoch in range(start_epoch, opt.epoch_cnt + 1):
+
         # train for 250,000 steps
         steps, last_state = train_one_epoch(
             trn_env,

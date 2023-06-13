@@ -1,0 +1,7 @@
+env:
+  name: [Asterix, Breakout, Enduro, Seaquest, MsPacman, SpaceInvaders]
+
+estimator:
+  encoder:
+    args_:
+      ckpt_idx: [1472315]

@@ -192,7 +192,7 @@ class CNN(nn.Module):
         super().__init__()
 
         self.cast = Byte2Float() if cast else nn.Identity()
-        cn_layers = cn_layers or [(16, 3, 1), (16, 3, 1)]
+        cn_layers = cn_layers or [(32, 3, 1), (32, 3, 1)]
         self.conv = get_cnn(inp_ch * hist_len, cn_layers)
 
         w = _get_size_after_convs(

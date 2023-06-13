@@ -7,7 +7,7 @@ dset:
   args_:
     trn_path: ./data/6games_rnd_new/{asterix,breakout,enduro,mspacman,seaquest,spaceinvaders}_{0000..0164}.tar
     val_path: ./data/6games_rnd_new/{asterix,breakout,enduro,mspacman,seaquest,spaceinvaders}_0165.tar
-    shuffle: 8000
+    shuffle: 10_000
     batch_size: 2
     subsample: 0
     seq_steps: 4
@@ -16,8 +16,8 @@ loader:
   args_:
     batch_size: null
     num_workers: 12
-  shuffle: 1000
-  batch_size: 32
+  shuffle: 20_000
+  batch_size: 64
 
 model:
   name: AutoEncoderKL

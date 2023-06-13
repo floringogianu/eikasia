@@ -35,6 +35,8 @@ class AutoEncoderKL(nn.Module):
 
     @classmethod
     def from_opt(cls, opt):
+        if hasattr(opt, "observation_model"):
+            opt = opt.observation_model
         opt.encoder.args["z_ch"] = 2 * opt.z_dim
         opt.decoder.args["z_ch"] = opt.z_dim
         encoder = getattr(nets, opt.encoder.name)(**opt.encoder.args)

@@ -82,5 +82,4 @@ def validate(agent, env, steps, logger):
                 if step_cnt >= steps:
                     done_eval = True
                     break
-            agent.reset()
     env.close()
